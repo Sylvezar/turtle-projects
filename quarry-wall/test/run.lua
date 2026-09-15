@@ -861,6 +861,36 @@ if chunk then
   ok(ran, "wall check runs: " .. tostring(rerr))
   ran, rerr = pcall(chunk, "help")
   ok(ran, "wall help runs: " .. tostring(rerr))
+
+  -- Actually drive a build through the front end. `check` and `help` touch
+  -- almost nothing, and once missed a local named `report` shadowing the
+  -- module of the same name -- which broke every command that reports.
+  mock.reset()
+  local cliRing = buildQuarry(0, 0)
+  station(SX, SZ, 0)
+  mock.setModem(nil)
+
+  local built, berr2 = pcall(chunk, "build", "1", "1", "3", "-y")
+  ok(built, "wall build runs end to end: " .. tostring(berr2))
+
+  if built then
+    local base = scan.baseY(cfg)
+    local placedCells = 0
+    for course = 1, 3 do
+      for _, c in ipairs(cliRing) do
+        if mock.getBlock(c.x, 1 + base + (course - 1), c.z) then
+          placedCells = placedCells + 1
+        end
+      end
+    end
+    eq(placedCells, #cliRing * 3, "and placed the whole three course wall")
+  end
+
+  -- With no modem, join must bow out cleanly. A crash here reads as a Lua
+  -- error message; a clean exit via die() carries an empty one.
+  local joined, jerr = pcall(chunk, "join")
+  ok(not joined and (jerr == "" or jerr == nil),
+     "wall join without a modem exits cleanly: " .. tostring(jerr))
 end
 
 local mchunk, merr = loadfile("wall/monitor.lua")

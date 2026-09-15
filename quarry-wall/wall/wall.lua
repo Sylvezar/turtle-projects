@@ -130,7 +130,9 @@ end
 ----------------------------------------------------------------------------]]
 
 --- Final tally, pointing at the hole log when there is anything in it.
-local function report(result)
+--- NOT called `report`: that is the module required at the top of this file,
+--- and a local of the same name shadows it for everything below.
+local function summarise(result)
   print("")
   print(("Done. %d placed, %d already occupied and left alone, %d missed.")
         :format(result.placed, result.skipped, result.missed))
@@ -288,7 +290,7 @@ local function runBuild(turtles, index, courses, yes)
   local done, result = build.run(cfg, cells, layers, from, to, 1, meta)
   if not done then die(result) end
 
-  report(result)
+  summarise(result)
 end
 
 function cmd.build(args)
@@ -384,7 +386,7 @@ function cmd.resume()
   local done, result = build.run(cfg, cells, layers, s.layer, s.to, s.index, meta)
   if not done then die(result) end
 
-  report(result)
+  summarise(result)
 end
 
 function cmd.seal(args)
