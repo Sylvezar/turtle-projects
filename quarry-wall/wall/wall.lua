@@ -438,6 +438,11 @@ function cmd.join()
     local sane, serr = ring.checkShape(mine)
     if not sane then die("the shared ring does not hold up: " .. tostring(serr)) end
 
+    -- Keep it. This list is in this turtle's own frame and is every bit as
+    -- good as one it walked itself, so a later resume can use it instead of
+    -- setting off round the perimeter.
+    ring.remember(cfg.ring, mine)
+
     print(("Wall ring: %d cells, worked out without walking it."):format(#mine))
   end
 
@@ -492,9 +497,13 @@ function cmd.resume(args)
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end
 
-  print("Re-tracing the ring...")
-  local cells, err = ring.survey(cfg.ring)
+  local cells, err, cached = ring.survey(cfg.ring)
   if not cells then die(err) end
+  if cached then
+    print(("Ring: %d cells, remembered from last time."):format(#cells))
+  else
+    print(("Ring: %d cells, walked."):format(#cells))
+  end
 
   -- The trace is anchored and wound the same way every time, so the saved
   -- index still means the same physical cell -- as long as the ring itself

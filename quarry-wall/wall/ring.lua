@@ -240,7 +240,18 @@ function ring.clearCache(spec)
   if fs.exists(path) then fs.delete(path) end
 end
 
-local function saveCache(spec, cells)
+local saveCacheImpl
+
+--- Save a cell list as this turtle's trace of `spec`.
+---
+--- Not only for turtles that walked it: a turtle that worked the ring out from
+--- the scout's copy has just as good a list, in its own frame, and saving it
+--- is what stops it walking the whole perimeter on the next resume.
+function ring.remember(spec, cells)
+  saveCacheImpl(spec, cells)
+end
+
+function saveCacheImpl(spec, cells)
   local f = fs.open(cacheFile(spec), "w")
   if not f then return end
   f.write(textutils.serialize({
@@ -289,7 +300,7 @@ function ring.survey(spec, opts)
       if cacheStillGood(spec, cached) then
         if opts.onFound then opts.onFound() end
         if not opts.stayOut then nav.goHome() end
-        return cached
+        return cached, true          -- second value: came from the cache
       end
       ring.clearCache(spec)
       nav.goHome()
@@ -324,7 +335,7 @@ function ring.survey(spec, opts)
               :format(#canon, spec.name or "the ring", want)
   end
 
-  saveCache(spec, canon)
+  saveCacheImpl(spec, canon)
   return canon
 end
 

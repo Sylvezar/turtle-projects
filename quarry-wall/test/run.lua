@@ -472,6 +472,55 @@ if #shifted > 2 then
 end
 
 --[[--------------------------------------------------------------------------
+  5d. Remembering the ring
+----------------------------------------------------------------------------]]
+
+section("ring cache")
+
+mock.reset()
+buildQuarry(0, 0)
+station(SX, SZ, 0)
+
+ring.clearCache(cfg.ring)
+local walked, fromCache = ring.survey(cfg.ring)
+ok(walked ~= nil, "walked the ring the first time")
+ok(not fromCache, "and did not claim it came from a cache")
+
+local movesAfterWalk = mock.T.moves
+
+station(SX, SZ, 0)
+local remembered, wasCached = ring.survey(cfg.ring)
+ok(remembered ~= nil, "got the ring the second time")
+ok(wasCached, "and that time it came from the cache")
+
+if walked and remembered then
+  eq(#remembered, #walked, "the remembered ring is the same size")
+  local differs = 0
+  for i = 1, #walked do
+    if remembered[i].x ~= walked[i].x or remembered[i].z ~= walked[i].z then
+      differs = differs + 1
+    end
+  end
+  eq(differs, 0, "and cell for cell identical")
+end
+
+-- A ring worked out from someone else's trace is just as good, and saving it
+-- is what stops a turtle walking the perimeter on its next resume.
+mock.reset()
+buildQuarry(0, 0)
+station(SX, SZ, 0)
+ring.clearCache(cfg.ring)
+
+local derived = ring.survey(cfg.ring)
+ring.clearCache(cfg.ring)
+ring.remember(cfg.ring, derived)
+
+station(SX, SZ, 0)
+local recalled, recalledCached = ring.survey(cfg.ring)
+ok(recalledCached, "a remembered ring is used without walking it")
+eq(recalled and #recalled or 0, #derived, "and is the right size")
+
+--[[--------------------------------------------------------------------------
   6. Different turtles, different places, same ring
 ----------------------------------------------------------------------------]]
 
