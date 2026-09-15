@@ -233,6 +233,13 @@ function ring.survey(cfg, strict)
   local sane, serr = ring.checkShape(canon)
   if not sane then return nil, serr end
 
+  local want = cfg.ring.expectCells
+  if want and #canon ~= want then
+    return nil, ("traced %d cells but config says the ring has %d -- something "
+              .. "blocked the trace part way round. Clear the pit and try again")
+              :format(#canon, want)
+  end
+
   return canon
 end
 

@@ -13,10 +13,12 @@
   doubled band and a gap elsewhere, which you would not discover until you
   looked at the finished wall.
 
-  Releasing one at a time matters too: tracing the marker ring takes a lap of
-  the perimeter, and eight turtles doing that simultaneously is a traffic jam
-  round the station. Each one is let go when the previous reports it has
-  started building, or after the stagger timeout, whichever comes first.
+  Releasing one at a time matters more than it looks: tracing the marker ring
+  is a full lap of the perimeter, and a turtle blocked part way round reads the
+  blockage as "no ring this way" and can trace a wrong line. So the next turtle
+  is released only when the previous one reports it has started building. The
+  timeout is a fallback for a turtle that has gone silent altogether, and is
+  pushed back every time the one being released says anything at all.
 
   Turtles started with `wall build` instead of `wall join` never enter the
   lobby; they just appear on the board once they start reporting.
@@ -132,6 +134,19 @@ local function coverage()
     if n > 1 and not dup then dup = c end
   end
 
+  -- All eight trace the same physical ring, so a turtle that came back with a
+  -- different cell count was disturbed part way round and its wall line is
+  -- wrong. Worth shouting about.
+  local sizes = {}
+  for i, t in pairs(seen) do
+    if t.cells then sizes[t.cells] = (sizes[t.cells] or 0) + 1 end
+  end
+  local kinds = 0
+  for _ in pairs(sizes) do kinds = kinds + 1 end
+  if kinds > 1 then
+    return "RING MISMATCH -- turtles traced different sized rings", true
+  end
+
   if dup then
     return ("OVERLAP at course %d -- two turtles share a slice"):format(dup), true
   end
@@ -232,6 +247,10 @@ local function drawWatch()
       doing = "done"
     elseif t.state == "stopped" then
       doing = "STOPPED"
+    elseif t.state == "tracing" then
+      doing = "tracing ring"
+    elseif t.state == "traced" then
+      doing = "traced " .. tostring(t.cells)
     elseif t.state == "restocking" then
       doing = "restock c" .. tostring(t.course)
     else
@@ -318,9 +337,12 @@ local function beginLaunch()
     courses = tonumber(read())
   end
 
-  write("Seconds between launches [45]: ")
-  stagger = tonumber(read()) or 45
-  if stagger < 5 then stagger = 5 end
+  -- A fallback for a turtle that has gone silent, not the normal path: the
+  -- next turtle is released as soon as this one reports it is building. Set it
+  -- well above how long a lap of the ring takes.
+  write("Give up waiting after [300]s: ")
+  stagger = tonumber(read()) or 300
+  if stagger < 30 then stagger = 30 end
 
   phase = "launch"
   releasing = 1
@@ -341,7 +363,17 @@ while true do
 
   if name == "rednet_message" then
     if event[4] == PROTOCOL then
-      handle(event[3])
+      local msg = event[3]
+      handle(msg)
+
+      -- Any word from the turtle being released means it is alive and working,
+      -- so push the give-up timer back. Only genuine silence should advance
+      -- the queue on a timeout.
+      if phase == "launch" and type(msg) == "table"
+      and msg.turtle == releasing then
+        releaseTimer = os.startTimer(stagger)
+      end
+
       maybeAdvance()
     end
 

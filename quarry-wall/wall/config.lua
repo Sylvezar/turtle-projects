@@ -74,6 +74,13 @@ config.ring = {
 
   -- How far to search outwards from the station before giving up.
   searchDistance = 128,
+
+  -- Optional. Once `wall scan` has told you how many cells the ring has, put
+  -- the number here and every turtle will refuse to build unless its own trace
+  -- agrees. A turtle blocked part way round the ring -- by another turtle, say
+  -- -- can come back with a short loop, and this is what catches that on a
+  -- turtle running without a monitor to cross-check it. nil = no check.
+  expectCells = nil,
 }
 
 --[[--------------------------------------------------------------------------

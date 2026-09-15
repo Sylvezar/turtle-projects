@@ -248,11 +248,19 @@ local function runBuild(turtles, index, courses, yes)
   local at, aerr = build.checkStation(cfg)
   if not at then die(aerr) end
 
+  -- Say so before tracing, not after. Tracing is a full lap of the ring and
+  -- the turtle was previously silent throughout, so the monitor could not tell
+  -- a turtle working from a turtle that had died -- and released the next one
+  -- on a timer into the middle of this one's lap.
+  report.identify({ turtle = index, turtles = turtles, courses = courses })
+  report.now({ state = "tracing" })
+
   print("Tracing the marker ring...")
   local cells, err = ring.survey(cfg, false)
   if not cells then die(err) end
 
   local d = ring.describe(cells)
+  report.now({ state = "traced", cells = d.count })
   print(("  %d cells, anchored at %d,%d"):format(d.count, d.anchor.x, d.anchor.z))
 
   local layers, perr = pattern.layers(cfg.pattern, courses)
