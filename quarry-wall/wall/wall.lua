@@ -540,6 +540,94 @@ function cmd.resume(args)
   summarise(result)
 end
 
+--[[--------------------------------------------------------------------------
+  patrol -- go back over the finished wall and fill whatever is missing.
+
+  Takes the same three numbers as `build`, so each turtle patrols the courses it
+  built. It carries a stack of every block its band uses rather than one, since
+  it will meet any of them.
+----------------------------------------------------------------------------]]
+function cmd.patrol(args)
+  local yes = false
+  local rest = {}
+  for _, a in ipairs(args or {}) do
+    if a == "-y" then yes = true else rest[#rest + 1] = a end
+  end
+
+  local at, aerr = build.checkStation(cfg)
+  if not at then die(aerr) end
+
+  local ok, ferr = build.refuel(cfg)
+  if not ok then die(ferr) end
+
+  if report.open(cfg) then print("Reporting to the monitor.") end
+
+  -- Fall back on the saved run, so a turtle that just finished knows its own
+  -- band without being told again.
+  local saved = build.loadState()
+  local turtles, index, courses
+  if #rest == 0 and saved then
+    turtles, index, courses = saved.turtles, saved.turtle, saved.courses
+    print(("Patrolling turtle %d of %d, %d courses.")
+          :format(index, turtles, courses))
+  else
+    turtles, index, courses = gather(rest)
+  end
+
+  local trust = false
+  if cfg.innerRing then trust = ring.survey(cfg.innerRing) ~= nil end
+
+  local cells, err = ring.survey(cfg.ring, { trustFrame = trust })
+  if not cells then die(err) end
+
+  local layers, perr = pattern.layers(cfg.pattern, courses)
+  if not layers then die(perr) end
+
+  local from, to = build.band(courses, turtles, index)
+  if from > to then die("this turtle has no courses to patrol") end
+
+  local kit = {}
+  for i = from, to do kit[layers[i]] = true end
+  local list = {}
+  for name in pairs(kit) do list[#list + 1] = name end
+  table.sort(list)
+
+  print("")
+  print(("Turtle %d of %d -- checking courses %d to %d of %d")
+        :format(index, turtles, from, to, courses))
+  print(("Ring: %d cells. Carrying: %d block types.")
+        :format(#cells, #list))
+  for _, name in ipairs(list) do print("  " .. shortName(name)) end
+
+  print("")
+  if not yes and not confirm("Start?") then
+    print("Nothing placed.")
+    return
+  end
+
+  report.identify({ turtle = index, turtles = turtles,
+                    from = from, to = to, courses = courses })
+  report.now({ state = "patrolling" })
+
+  local loaded, lerr = build.loadKit(cfg, list, 64)
+  if not loaded then die(lerr) end
+
+  local done, result = build.patrol(cfg, cells, layers, from, to)
+  if not done then die(result) end
+
+  print("")
+  print(("Checked %d cells. Filled %d holes.")
+        :format(result.checked, result.filled))
+  print(("Skipped %d corners -- no way to see them from inside.")
+        :format(result.corners))
+  if result.missed > 0 then
+    printError(("%d could not be reached or placed."):format(result.missed))
+  end
+
+  report.now({ state = "done", placed = result.filled,
+               skipped = result.corners, missed = result.missed })
+end
+
 function cmd.seal(args)
   local gap = cfg.wall.aboveRing - 1
   if gap < 1 then
@@ -631,6 +719,7 @@ function cmd.help()
   print("wall build [n] [i] [courses]  build this turtle's share")
   print("wall resume [-y]              carry on from an interrupted run")
   print("wall seal [courses]           fill the gap under the wall base")
+  print("wall patrol [n] [i] [courses] go back over the wall and fill gaps")
   print("wall clear                    show what it holds and put it away")
 end
 

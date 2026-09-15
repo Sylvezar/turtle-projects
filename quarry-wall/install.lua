@@ -404,6 +404,76 @@ function build.park(cfg, keepName, keepMax)
   return true
 end
 
+--[[--------------------------------------------------------------------------
+  Carrying several block types at once.
+
+  Everything up to here deals in one block at a time, because a course is made
+  of one block. A patrol is not: it walks past every course in its band and has
+  to be able to plug a hole in any of them, so it carries a little of each.
+----------------------------------------------------------------------------]]
+
+--- Park everything except up to `keep[name]` of each named block.
+function build.parkExcept(cfg, keep)
+  local spec = cfg.station.overflow
+  if not spec then return false, "no overflow chest configured" end
+  if not nav.reach(spec) then return false, "could not reach the overflow chest" end
+
+  local kept = {}
+
+  for _, s in ipairs(inv.ALL) do
+    local held = turtle.getItemCount(s)
+    if held > 0 then
+      local name = inv.nameAt(s)
+      local max  = keep[name]
+      local drop = held
+
+      if max then
+        local room = max - (kept[name] or 0)
+        local k = math.min(held, math.max(0, room))
+        kept[name] = (kept[name] or 0) + k
+        drop = held - k
+      end
+
+      if drop > 0 then
+        turtle.select(s)
+        nav.dropAt(spec, drop)
+        -- Judged by the slot, not the call: drop reports success for a partial
+        -- move, which is what a nearly full chest gives you.
+        if turtle.getItemCount(s) > held - drop then
+          return false, ("the overflow chest is full -- %s would not fit")
+                        :format(tostring(name))
+        end
+      end
+    end
+  end
+
+  return true
+end
+
+--- Take up to `wants[name]` of each named block back out of the overflow.
+function build.collectMany(cfg, wants)
+  local spec = cfg.station.overflow
+  if not spec then return false end
+  if not nav.reach(spec) then return false end
+
+  local function satisfied()
+    for name, n in pairs(wants) do
+      if inv.count(name) < n then return false end
+    end
+    return true
+  end
+
+  for _ = 1, 64 do
+    if satisfied() then break end
+    local slot = inv.firstEmpty(inv.ALL)
+    if not slot then break end
+    turtle.select(slot)
+    if not nav.suckAt(spec, 64) then break end
+  end
+
+  return build.parkExcept(cfg, wants)
+end
+
 --- How many of `name` are already sitting in the overflow chest. Reading the
 --- chest costs nothing, so this is always worth doing before crafting.
 function build.readyInOverflow(cfg, name)
@@ -523,15 +593,28 @@ function build.restock(cfg, block, want, stillNeeded)
     end
   end
 
-  -- Some of what we want may already be made and waiting.
+  local stocked, serr = build.stockUp(cfg, block, want)
+  if not stocked then return 0, serr end
+
+  return build.collect(cfg, block, want)
+end
+
+--[[--------------------------------------------------------------------------
+  stockUp -- make sure the overflow chest holds `want` of `block`.
+
+  Assumes the turtle is already empty, which is what crafting demands. Leaves
+  everything in the overflow rather than on board, so several types can be
+  stocked one after another without the previous one getting in the way.
+----------------------------------------------------------------------------]]
+function build.stockUp(cfg, block, want)
   local shortfall = want - build.readyInOverflow(cfg, block)
 
   while shortfall > 0 do
     local plan, perr = craft.planBatch(block, shortfall)
-    if not plan then return 0, perr end
+    if not plan then return false, perr end
 
     local pulled, rerr = pullRaw(cfg, plan.raw)
-    if not pulled then return 0, rerr end
+    if not pulled then return false, rerr end
 
     -- Exactly the batch, not at least it. A batch is sized so every stage of
     -- the chain divides evenly; one block more and the last stage has a
@@ -543,30 +626,52 @@ function build.restock(cfg, block, want, stillNeeded)
       -- is directly underneath, so this costs nothing.
       print(("  %d spare cobbled deepslate, putting it back")
             :format(have - plan.raw))
-      local shed, serr = build.park(cfg, craft.RAW, plan.raw)
+      local shed, sherr = build.park(cfg, craft.RAW, plan.raw)
       if not shed then
-        return 0, serr or "could not put the surplus back"
+        return false, sherr or "could not put the surplus back"
       end
       have = inv.count(craft.RAW)
     end
 
     if have ~= plan.raw then
-      return 0, ("needed exactly %d cobbled deepslate for this batch, have %d "
-              .. "-- the supply chest may have run dry")
-                :format(plan.raw, have)
+      return false, ("needed exactly %d cobbled deepslate for this batch, have "
+                  .. "%d -- the supply chest may have run dry")
+                    :format(plan.raw, have)
     end
 
     local made, cerr = craft.runBatch(plan)
-    if not made then return 0, cerr end
+    if not made then return false, cerr end
 
-    local parked, perr = build.park(cfg)
+    local parked, pkerr = build.park(cfg)
     if not parked then
-      return 0, perr or "could not park the finished batch"
+      return false, pkerr or "could not park the finished batch"
     end
     shortfall = shortfall - plan.out
   end
 
-  return build.collect(cfg, block, want)
+  return true
+end
+
+--[[--------------------------------------------------------------------------
+  loadKit -- carry a little of every block a patrol might need.
+----------------------------------------------------------------------------]]
+function build.loadKit(cfg, types, perType)
+  if not nav.goHome() then return false, "could not get back to the station" end
+
+  local ok, err = build.refuel(cfg)
+  if not ok then return false, err end
+
+  local cleared, cerr = build.park(cfg)
+  if not cleared then return false, cerr end
+
+  for _, block in ipairs(types) do
+    local stocked, serr = build.stockUp(cfg, block, perType)
+    if not stocked then return false, serr end
+  end
+
+  local wants = {}
+  for _, block in ipairs(types) do wants[block] = perType end
+  return build.collectMany(cfg, wants)
 end
 
 --[[--------------------------------------------------------------------------
@@ -812,6 +917,100 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
                fuel = turtle.getFuelLevel() })
 
   return true, { placed = placed, skipped = skipped, missed = missed }
+end
+
+--[[--------------------------------------------------------------------------
+  patrol -- walk the finished wall looking for gaps, and plug them.
+
+  A course is built in one pass and anything in the way at that moment -- a mob
+  standing in the cell, a turtle, a cable -- leaves a hole. This goes back over
+  the wall afterwards carrying a little of every block in the pattern, and fills
+  whatever it finds missing.
+
+  It flies up the column just INSIDE each wall cell and looks sideways, because
+  the wall cell itself is where the wall is. That is also why corners are
+  skipped: a corner has no interior neighbour to fly up beside, so there is
+  nowhere to look from. They cannot be seen from inside the pit either, which
+  is what makes that acceptable.
+----------------------------------------------------------------------------]]
+
+--- The interior cell next to `c`, and the heading that looks from it at `c`.
+local function lookoutFor(cells, indexOf, c)
+  for _, d in ipairs(DIRS) do
+    local nx, nz = c.x + d[1], c.z + d[2]
+    if not indexOf[nx .. "," .. nz] and build.isInside(cells, nx, nz) then
+      return { x = nx, z = nz, h = d[3] }
+    end
+  end
+  return nil
+end
+
+function build.patrol(cfg, cells, layers, from, to)
+  local base    = scan.baseY(cfg)
+  local indexOf = build.indexMap(cells)
+
+  local filled, corners, missed, checked = 0, 0, 0, 0
+  local up = true
+
+  for idx, c in ipairs(cells) do
+    local look = lookoutFor(cells, indexOf, c)
+
+    if not look then
+      corners = corners + 1
+    else
+      -- Serpentine: up one column, down the next, rather than dropping back to
+      -- the bottom every time.
+      local first, last, step
+      if up then first, last, step = from, to, 1
+      else first, last, step = to, from, -1 end
+      up = not up
+
+      local reached = nav.goTo(look.x, base + (first - 1), look.z)
+      if not reached then
+        missed = missed + (math.abs(to - from) + 1)
+      else
+        nav.turnTo(look.h)
+
+        for course = first, last, step do
+          local y = base + (course - 1)
+
+          if nav.pos().y ~= y then
+            if not nav.goTo(look.x, y, look.z) then break end
+            nav.turnTo(look.h)
+          end
+
+          checked = checked + 1
+
+          if not turtle.detect() then
+            local block = layers[course]
+            if inv.count(block) == 0 then
+              local kit = {}
+              for i = from, to do kit[layers[i]] = true end
+              local list = {}
+              for name in pairs(kit) do list[#list + 1] = name end
+
+              local got, kerr = build.loadKit(cfg, list, 64)
+              if not got then return false, kerr end
+
+              if not nav.goTo(look.x, y, look.z) then break end
+              nav.turnTo(look.h)
+            end
+
+            if inv.selectItem(block) and turtle.place() then
+              filled = filled + 1
+              logHole(cfg, "fixed", course, idx, #cells, "filled")
+            else
+              missed = missed + 1
+            end
+          end
+        end
+      end
+    end
+  end
+
+  nav.goHome()
+  return true, { filled = filled, checked = checked,
+                 corners = corners, missed = missed }
 end
 
 --[[--------------------------------------------------------------------------
@@ -1303,29 +1502,44 @@ function craft.planBatch(name, want)
   local last = chain[#chain]
   local top  = math.min(64, math.max(1, math.ceil(want / last.count)))
 
-  for s = top, 1, -1 do
-    local steps, need, ok = {}, s, true
+  --- Does `s` crafts of the last stage divide cleanly all the way down?
+  local function trySteps(s)
+    local steps, need = {}, s
 
     for i = #chain, 1, -1 do
       local r = chain[i]
-      if need < 1 or need > 64 then ok = false break end
+      if need < 1 or need > 64 then return nil end
       steps[i] = need
 
       local inputItems = need * cellCount(r)
       if i > 1 then
         local prev = chain[i - 1]
-        if inputItems % prev.count ~= 0 then ok = false break end
-        -- math.floor, not the // operator: CC:Tweaked is Lua 5.2 and has no
-        -- integer division.
+        if inputItems % prev.count ~= 0 then return nil end
+        -- math.floor, not integer division: CC:Tweaked is Lua 5.2 and has
+        -- no such operator.
         need = math.floor(inputItems / prev.count)
       else
         need = inputItems          -- raw cobbled deepslate
       end
     end
 
-    if ok then
-      return { steps = steps, chain = chain, raw = need, out = s * last.count }
-    end
+    return { steps = steps, chain = chain, raw = need, out = s * last.count }
+  end
+
+  -- The biggest batch that does not overshoot, first.
+  for s = top, 1, -1 do
+    local plan = trySteps(s)
+    if plan then return plan end
+  end
+
+  -- Nothing divides inside what was asked for. Some chains have a minimum: a
+  -- chiseled deepslate takes two slabs and slabs come six at a time, so three
+  -- is the smallest batch that comes out even -- and asking for one has no
+  -- exact answer at all. Make the smallest batch that does divide and carry the
+  -- remainder; it goes to the overflow chest and gets used next time round.
+  for s = top + 1, 64 do
+    local plan = trySteps(s)
+    if plan then return plan end
   end
 
   return nil, ("cannot find a clean batch for %s"):format(name)
@@ -3614,7 +3828,7 @@ order[#order + 1] = "wall/version.lua"
 files["wall/version.lua"] = [=[
 -- Generated by tools/make_installer.py. Not part of the source tree;
 -- it exists so an installed turtle can say which build it is running.
-return { build = "fe96e19f", made = "2026-09-15 20:01 UTC" }
+return { build = "603200c1", made = "2026-09-15 20:32 UTC" }
 ]=]
 
 order[#order + 1] = "wall/wall.lua"
@@ -4161,6 +4375,94 @@ function cmd.resume(args)
   summarise(result)
 end
 
+--[[--------------------------------------------------------------------------
+  patrol -- go back over the finished wall and fill whatever is missing.
+
+  Takes the same three numbers as `build`, so each turtle patrols the courses it
+  built. It carries a stack of every block its band uses rather than one, since
+  it will meet any of them.
+----------------------------------------------------------------------------]]
+function cmd.patrol(args)
+  local yes = false
+  local rest = {}
+  for _, a in ipairs(args or {}) do
+    if a == "-y" then yes = true else rest[#rest + 1] = a end
+  end
+
+  local at, aerr = build.checkStation(cfg)
+  if not at then die(aerr) end
+
+  local ok, ferr = build.refuel(cfg)
+  if not ok then die(ferr) end
+
+  if report.open(cfg) then print("Reporting to the monitor.") end
+
+  -- Fall back on the saved run, so a turtle that just finished knows its own
+  -- band without being told again.
+  local saved = build.loadState()
+  local turtles, index, courses
+  if #rest == 0 and saved then
+    turtles, index, courses = saved.turtles, saved.turtle, saved.courses
+    print(("Patrolling turtle %d of %d, %d courses.")
+          :format(index, turtles, courses))
+  else
+    turtles, index, courses = gather(rest)
+  end
+
+  local trust = false
+  if cfg.innerRing then trust = ring.survey(cfg.innerRing) ~= nil end
+
+  local cells, err = ring.survey(cfg.ring, { trustFrame = trust })
+  if not cells then die(err) end
+
+  local layers, perr = pattern.layers(cfg.pattern, courses)
+  if not layers then die(perr) end
+
+  local from, to = build.band(courses, turtles, index)
+  if from > to then die("this turtle has no courses to patrol") end
+
+  local kit = {}
+  for i = from, to do kit[layers[i]] = true end
+  local list = {}
+  for name in pairs(kit) do list[#list + 1] = name end
+  table.sort(list)
+
+  print("")
+  print(("Turtle %d of %d -- checking courses %d to %d of %d")
+        :format(index, turtles, from, to, courses))
+  print(("Ring: %d cells. Carrying: %d block types.")
+        :format(#cells, #list))
+  for _, name in ipairs(list) do print("  " .. shortName(name)) end
+
+  print("")
+  if not yes and not confirm("Start?") then
+    print("Nothing placed.")
+    return
+  end
+
+  report.identify({ turtle = index, turtles = turtles,
+                    from = from, to = to, courses = courses })
+  report.now({ state = "patrolling" })
+
+  local loaded, lerr = build.loadKit(cfg, list, 64)
+  if not loaded then die(lerr) end
+
+  local done, result = build.patrol(cfg, cells, layers, from, to)
+  if not done then die(result) end
+
+  print("")
+  print(("Checked %d cells. Filled %d holes.")
+        :format(result.checked, result.filled))
+  print(("Skipped %d corners -- no way to see them from inside.")
+        :format(result.corners))
+  if result.missed > 0 then
+    printError(("%d could not be reached or placed."):format(result.missed))
+  end
+
+  report.now({ state = "done", placed = result.filled,
+               skipped = result.corners, missed = result.missed })
+end
+
 function cmd.seal(args)
   local gap = cfg.wall.aboveRing - 1
   if gap < 1 then
@@ -4252,6 +4554,7 @@ function cmd.help()
   print("wall build [n] [i] [courses]  build this turtle's share")
   print("wall resume [-y]              carry on from an interrupted run")
   print("wall seal [courses]           fill the gap under the wall base")
+  print("wall patrol [n] [i] [courses] go back over the wall and fill gaps")
   print("wall clear                    show what it holds and put it away")
 end
 
@@ -4314,7 +4617,7 @@ if stale then
   printError("")
   printError("  rm wall/config.lua   then install again")
 end
-print("build fe96e19f  (2026-09-15 20:01 UTC)")
+print("build 603200c1  (2026-09-15 20:32 UTC)")
 
 -- Anything after the url is handed straight to the program, so one line both
 -- installs and starts a turtle:

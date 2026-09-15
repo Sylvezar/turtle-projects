@@ -145,29 +145,44 @@ function craft.planBatch(name, want)
   local last = chain[#chain]
   local top  = math.min(64, math.max(1, math.ceil(want / last.count)))
 
-  for s = top, 1, -1 do
-    local steps, need, ok = {}, s, true
+  --- Does `s` crafts of the last stage divide cleanly all the way down?
+  local function trySteps(s)
+    local steps, need = {}, s
 
     for i = #chain, 1, -1 do
       local r = chain[i]
-      if need < 1 or need > 64 then ok = false break end
+      if need < 1 or need > 64 then return nil end
       steps[i] = need
 
       local inputItems = need * cellCount(r)
       if i > 1 then
         local prev = chain[i - 1]
-        if inputItems % prev.count ~= 0 then ok = false break end
-        -- math.floor, not the // operator: CC:Tweaked is Lua 5.2 and has no
-        -- integer division.
+        if inputItems % prev.count ~= 0 then return nil end
+        -- math.floor, not integer division: CC:Tweaked is Lua 5.2 and has
+        -- no such operator.
         need = math.floor(inputItems / prev.count)
       else
         need = inputItems          -- raw cobbled deepslate
       end
     end
 
-    if ok then
-      return { steps = steps, chain = chain, raw = need, out = s * last.count }
-    end
+    return { steps = steps, chain = chain, raw = need, out = s * last.count }
+  end
+
+  -- The biggest batch that does not overshoot, first.
+  for s = top, 1, -1 do
+    local plan = trySteps(s)
+    if plan then return plan end
+  end
+
+  -- Nothing divides inside what was asked for. Some chains have a minimum: a
+  -- chiseled deepslate takes two slabs and slabs come six at a time, so three
+  -- is the smallest batch that comes out even -- and asking for one has no
+  -- exact answer at all. Make the smallest batch that does divide and carry the
+  -- remainder; it goes to the overflow chest and gets used next time round.
+  for s = top + 1, 64 do
+    local plan = trySteps(s)
+    if plan then return plan end
   end
 
   return nil, ("cannot find a clean batch for %s"):format(name)

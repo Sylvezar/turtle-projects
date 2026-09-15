@@ -849,6 +849,96 @@ if sdone then
 end
 
 --[[--------------------------------------------------------------------------
+  9b. Patrolling the finished wall
+----------------------------------------------------------------------------]]
+
+section("patrol")
+
+mock.reset()
+local pcells = buildQuarry(0, 0)
+station(SX, SZ, 0)
+
+local pring   = ring.survey(cfg.ring)
+local players = pattern.layers(cfg.pattern, COURSES)
+local pbase   = scan.baseY(cfg)
+local PFROM, PTO = 1, 3
+
+ok(pring ~= nil, "traced the ring for the patrol")
+
+if pring then
+  local pIndex = build.indexMap(pring)
+
+  -- Stand a complete wall up by hand over the courses being patrolled.
+  for course = PFROM, PTO do
+    local wy = 1 + pbase + (course - 1)
+    for _, c in ipairs(pring) do
+      mock.setBlock(c.x + SX, wy, c.z + SZ, players[course])
+    end
+  end
+
+  -- Knock holes in cells that have an interior neighbour, plus one corner,
+  -- which the patrol cannot see and is expected to leave alone.
+  local punched, cornerHole = {}, nil
+  for i, c in ipairs(pring) do
+    local interior = false
+    for _, d in ipairs({ {0,1}, {1,0}, {0,-1}, {-1,0} }) do
+      local nx, nz = c.x + d[1], c.z + d[2]
+      if not pIndex[nx .. "," .. nz] and build.isInside(pring, nx, nz) then
+        interior = true
+        break
+      end
+    end
+
+    if interior and #punched < 4 and i % 5 == 0 then
+      local course = PFROM + (#punched % (PTO - PFROM + 1))
+      local wy = 1 + pbase + (course - 1)
+      mock.setBlock(c.x + SX, wy, c.z + SZ, nil)
+      punched[#punched + 1] = { x = c.x + SX, y = wy, z = c.z + SZ,
+                                want = players[course] }
+    elseif not interior and not cornerHole then
+      local wy = 1 + pbase
+      mock.setBlock(c.x + SX, wy, c.z + SZ, nil)
+      cornerHole = { x = c.x + SX, y = wy, z = c.z + SZ }
+    end
+  end
+
+  eq(#punched, 4, "punched four reachable holes")
+  ok(cornerHole ~= nil, "and one in a corner")
+
+  station(SX, SZ, 0)
+  local patrolRing = ring.survey(cfg.ring)
+
+  local kit = {}
+  for i = PFROM, PTO do kit[players[i]] = true end
+  local list = {}
+  for name in pairs(kit) do list[#list + 1] = name end
+
+  local loaded, lerr = build.loadKit(cfg, list, 64)
+  ok(loaded, "loaded a block of each type: " .. tostring(lerr))
+
+  local pok, pres = build.patrol(cfg, patrolRing, players, PFROM, PTO)
+  ok(pok, "patrol finished: " .. tostring(pres))
+
+  if pok then
+    print(("  checked %d, filled %d, corners %d, missed %d")
+          :format(pres.checked, pres.filled, pres.corners, pres.missed))
+
+    eq(pres.filled, 4, "filled every reachable hole")
+    eq(pres.missed, 0, "and missed none")
+    ok(pres.corners > 0, "skipped the corners it cannot see")
+
+    local wrongFill = 0
+    for _, h in ipairs(punched) do
+      if mock.getBlock(h.x, h.y, h.z) ~= h.want then wrongFill = wrongFill + 1 end
+    end
+    eq(wrongFill, 0, "each hole got the block its course calls for")
+
+    ok(mock.getBlock(cornerHole.x, cornerHole.y, cornerHole.z) == nil,
+       "the corner hole was left alone, as expected")
+  end
+end
+
+--[[--------------------------------------------------------------------------
   10. Resume
 ----------------------------------------------------------------------------]]
 
