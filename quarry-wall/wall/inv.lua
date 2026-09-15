@@ -161,12 +161,34 @@ function inv.stageOnly(cellList, steps)
   -- Start from an empty grid, so a cell holding the wrong thing -- or too much
   -- of the right thing -- cannot survive into the craft.
   for _, s in ipairs(inv.GRID) do
+    local guard = 0
     while turtle.getItemCount(s) > 0 do
+      guard = guard + 1
+      if guard > 20 then
+        return false, ("stuck moving %s out of slot %d")
+                      :format(tostring(inv.nameAt(s)), s)
+      end
+
       local dest = spillTo(inv.nameAt(s))
-      if not dest then return false, "no room to clear the crafting grid" end
+      if not dest then
+        -- Name what is taking up the room. "no room" on its own says nothing
+        -- about which of seven slots is the problem, or what is in them.
+        local held = {}
+        for _, o in ipairs(inv.ALL) do
+          if not IS_GRID[o] and turtle.getItemCount(o) > 0 then
+            held[#held + 1] = ("%d=%s"):format(o, tostring(inv.nameAt(o)))
+          end
+        end
+        return false, ("no room to clear the grid: %s is in slot %d and the "
+                    .. "other slots hold %s. Try `wall clear`.")
+                      :format(tostring(inv.nameAt(s)), s,
+                              #held > 0 and table.concat(held, " ") or "nothing")
+      end
+
       turtle.select(s)
       if not turtle.transferTo(dest) then
-        return false, "could not clear the crafting grid"
+        return false, ("could not move %s from slot %d to %d")
+                      :format(tostring(inv.nameAt(s)), s, dest)
       end
     end
   end

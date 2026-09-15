@@ -540,6 +540,56 @@ function cmd.seal(args)
         :format(result.placed, result.skipped, result.missed))
 end
 
+--[[--------------------------------------------------------------------------
+  clear -- show what the turtle is holding, and put it away.
+
+  Crafting needs a completely empty turtle, so anything left on board after a
+  crash stops the next run before it starts. This says what is there and then
+  empties it: fuel back to the fuel chest, everything else to the overflow.
+----------------------------------------------------------------------------]]
+function cmd.clear()
+  print("Holding:")
+
+  local any = false
+  for s = 1, 16 do
+    local d = turtle.getItemDetail(s)
+    if d then
+      any = true
+      print(("  %2d  %-28s x%d")
+            :format(s, (d.name:gsub("^minecraft:", "")), d.count))
+    end
+  end
+  if not any then print("  nothing") end
+
+  if not cfg.station.overflow then
+    die("no overflow chest configured, so there is nowhere to put this")
+  end
+
+  local at, aerr = build.checkStation(cfg)
+  if not at then die(aerr) end
+
+  -- Fuel belongs in the fuel chest, not mixed in with the building materials.
+  build.returnSpareFuel(cfg)
+
+  local ok, err = build.park(cfg)
+
+  print("")
+  if ok then
+    print("Cleared. The turtle is empty and ready.")
+  else
+    printError(err or "could not clear the turtle")
+    printError("")
+    printError("Still holding:")
+    for s = 1, 16 do
+      local d = turtle.getItemDetail(s)
+      if d then
+        printError(("  %2d  %-28s x%d")
+                   :format(s, (d.name:gsub("^minecraft:", "")), d.count))
+      end
+    end
+  end
+end
+
 function cmd.help()
   print("wall check                    check config and turtle, move nothing")
   print("wall join                     wait for the monitor to assign a slot")
@@ -547,6 +597,7 @@ function cmd.help()
   print("wall build [n] [i] [courses]  build this turtle's share")
   print("wall resume                   carry on from an interrupted run")
   print("wall seal [courses]           fill the gap under the wall base")
+  print("wall clear                    show what it holds and put it away")
 end
 
 --[[--------------------------------------------------------------------------

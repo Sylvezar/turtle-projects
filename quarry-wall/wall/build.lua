@@ -493,6 +493,17 @@ function build.restock(cfg, block, want, stillNeeded)
     return 0, cerr or "could not clear the inventory"
   end
 
+  -- And say so here if it is not, rather than pulling material on top of
+  -- whatever survived and failing later in a way that points at the wrong
+  -- thing entirely.
+  for _, s in ipairs(inv.ALL) do
+    if turtle.getItemCount(s) > 0 then
+      return 0, ("slot %d still holds %s after clearing out -- the turtle has "
+              .. "to be empty to craft. Try `wall clear`.")
+                :format(s, tostring(inv.nameAt(s)))
+    end
+  end
+
   -- Some of what we want may already be made and waiting.
   local shortfall = want - build.readyInOverflow(cfg, block)
 
@@ -502,6 +513,15 @@ function build.restock(cfg, block, want, stillNeeded)
 
     local pulled, rerr = pullRaw(cfg, plan.raw)
     if not pulled then return 0, rerr end
+
+    -- Exactly the batch, not at least it. A batch is sized so every stage of
+    -- the chain divides evenly; one block more and the last stage has a
+    -- remainder, which is a stray item, which is a refused craft.
+    local have = inv.count(craft.RAW)
+    if have ~= plan.raw then
+      return 0, ("needed exactly %d cobbled deepslate for this batch, have %d")
+                :format(plan.raw, have)
+    end
 
     local made, cerr = craft.runBatch(plan)
     if not made then return 0, cerr end
@@ -677,8 +697,14 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
       while idx <= perLayer and inv.count(block) > 0 do
         if not fuelToSpare(cfg) then
           save(layer, idx)
-          local ok, err = build.restock(cfg, block, 0, still)
-          if ok == 0 and err then return false, err end
+          -- Just go and refuel. Running a full restock here would park the
+          -- load it is carrying and then collect nothing back, because it
+          -- asked for none.
+          if not nav.goHome() then
+            return false, "could not get back to the station to refuel"
+          end
+          local fine, ferr = build.refuel(cfg)
+          if not fine then return false, ferr end
         end
 
         local cell    = cells[idx]
