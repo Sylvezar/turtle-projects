@@ -36,34 +36,54 @@ local function isFuel()
   return turtle.refuel(0) == true
 end
 
+local litter = false
+
 --[[--------------------------------------------------------------------------
   Empty the turtle, putting each thing where it belongs.
+
+  The supply chest is fed by an export bus and is therefore usually full, so
+  dropping into it fails more often than not. Each test needs the turtle to
+  hold nothing but the recipe, so anything that will not fit goes on the floor
+  rather than being left on board to spoil the next test.
 ----------------------------------------------------------------------------]]
+local function toFloor(slot)
+  turtle.select(slot)
+  nav.turnTo(2)                     -- away from the chest stack, into the pit
+  if turtle.drop() then litter = true end
+  nav.turnTo(0)
+end
+
 local function stow()
   for s = 1, 16 do
     if turtle.getItemCount(s) > 0 then
       turtle.select(s)
-      local count = turtle.getItemCount(s)
+      local what = nameAt(s)
 
-      if nameAt(s) == RAW then
-        nav.dropAt(cfg.station.supply, count)
+      if what == RAW then
+        if not nav.dropAt(cfg.station.supply, turtle.getItemCount(s)) then
+          toFloor(s)                -- chest full, as it usually is
+        end
 
       elseif isFuel() then
-        -- Fuel chest if there is one; otherwise burn it rather than
-        -- contaminate the supply chest. Burning fuel is what it is for.
+        local placed = false
         if cfg.station.fuel then
           turtle.select(s)
-          nav.dropAt(cfg.station.fuel, count)
-        else
+          placed = nav.dropAt(cfg.station.fuel, turtle.getItemCount(s))
+        end
+        if not placed then
+          -- Burn it rather than put fuel in the supply chest or on the floor.
           turtle.select(s)
           while turtle.getItemCount(s) > 0 do
             if not turtle.refuel(1) then break end
           end
+          if turtle.getItemCount(s) > 0 then toFloor(s) end
         end
 
       else
-        printError(("  slot %d holds %s -- leaving it alone")
-                   :format(s, tostring(nameAt(s))))
+        -- Craft output and anything else unexpected.
+        if not nav.dropAt(cfg.station.supply, turtle.getItemCount(s)) then
+          toFloor(s)
+        end
       end
     end
   end
@@ -152,18 +172,28 @@ local function attempt(label, layout)
     nav.dropAt(cfg.station.supply, turtle.getItemCount(1) - keep)
   end
 
-  local occupied = {}
+  -- Report what is genuinely on board, names and all. If a test fails this is
+  -- the only thing that says why, and "4 items somewhere" is not enough.
+  local occupied, stray = {}, false
   for s = 1, 16 do
     if turtle.getItemCount(s) > 0 then
-      occupied[#occupied + 1] = s .. "x" .. turtle.getItemCount(s)
+      local what = (nameAt(s) or "?"):gsub("^minecraft:", "")
+      occupied[#occupied + 1] = ("%d=%s x%d"):format(s, what,
+                                                     turtle.getItemCount(s))
+      if layout[s] == nil then stray = true end
     end
+  end
+
+  print(label)
+  print("  " .. table.concat(occupied, "  "))
+
+  if stray then
+    printError("  inventory is not what the test asked for -- result is void")
   end
 
   turtle.select(3)
   local ok, err = turtle.craft(1)
 
-  print(label)
-  print("  slots: " .. table.concat(occupied, " "))
   if ok then
     print("  craft: OK")
   else
