@@ -398,7 +398,14 @@ local function drawScan()
 end
 
 local function drawWatch()
-  header(("%d turtles    %d holes"):format(#waiting, #holes))
+  -- Count what is actually reporting, not what enlisted. A patrol, a `build`
+  -- typed in by hand and a `resume` all skip the lobby, so a screen full of
+  -- working turtles was headed "0 turtles".
+  local reporting = 0
+  for _ in pairs(seen) do reporting = reporting + 1 end
+
+  header(("%d turtles    %d holes")
+         :format(math.max(#waiting, reporting), #holes))
   -- "slice", not "band": it is a band of courses when building by course and a
   -- stretch of the ring when building by column.
   print(" #  slice     doing            done  skip miss")
