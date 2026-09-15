@@ -849,6 +849,74 @@ if sdone then
 end
 
 --[[--------------------------------------------------------------------------
+  9a. Not hovering where hovering is impossible
+----------------------------------------------------------------------------]]
+
+section("placing under a built course")
+
+--- Place `n` cells of a course whose ceiling is already solid, and report how
+--- many moves it took.
+local function costOfCourse(skipOverhead, n)
+  mock.reset()
+  local cells = buildQuarry(0, 0)
+  station(SX, SZ, 0)
+
+  local traced = ring.survey(cfg.ring)
+  local base   = scan.baseY(cfg)
+  local y      = base            -- course 1
+  local block  = M("deepslate_tiles")
+
+  -- The course above is already there, as it is for the top course of a band.
+  for _, c in ipairs(traced) do
+    mock.setBlock(c.x + SX, 1 + y + 1, c.z + SZ, M("deepslate_bricks"))
+  end
+
+  for i = 1, 16 do mock.T.slots[i] = nil end
+  mock.T.slots[1] = { name = block, count = 64 }
+
+  local indexOf = build.indexMap(traced)
+  local filled  = {}
+  local before  = mock.T.moves
+  local noHover = skipOverhead
+
+  for i = 1, n do
+    local cell = traced[i]
+    local outcome, overhead = build.placeCell(cfg, traced, cell, y, block,
+                                              indexOf, filled, noHover)
+    if overhead then noHover = true end
+    if outcome ~= "missed" then
+      filled[cell.x .. "," .. cell.z] = true
+    end
+  end
+
+  return mock.T.moves - before
+end
+
+local shortAdaptive = costOfCourse(false, 12)
+local shortForced   = costOfCourse(true, 12)
+local longAdaptive  = costOfCourse(false, 30)
+local longForced    = costOfCourse(true, 30)
+
+ok(shortAdaptive > 0, "placed a course under a built one")
+print(("  12 cells: %d moves learning, %d told up front")
+      :format(shortAdaptive, shortForced))
+print(("  30 cells: %d moves learning, %d told up front")
+      :format(longAdaptive, longForced))
+
+-- Finding out costs exactly one wasted attempt, whatever the course length.
+-- Without the flag it would cost one per cell, so the gap must not grow.
+local shortGap = shortAdaptive - shortForced
+local longGap  = longAdaptive - longForced
+
+ok(longGap <= shortGap + 8,
+   ("the penalty is paid once, not per cell (%d then %d)")
+   :format(shortGap, longGap))
+
+-- And only the top course of a band has anyone else's wall above it, so this
+-- is paid once per band rather than once per course.
+ok(longForced < longAdaptive, "knowing up front is still cheaper")
+
+--[[--------------------------------------------------------------------------
   9b. Patrolling the finished wall
 ----------------------------------------------------------------------------]]
 

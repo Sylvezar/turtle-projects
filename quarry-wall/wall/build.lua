@@ -678,22 +678,32 @@ end
   it, and placing sideways. Between the two a wall can be threaded past
   obstacles without breaking any of them.
 ----------------------------------------------------------------------------]]
-function build.placeCell(cfg, cells, c, y, block, indexOf, filled)
-  if nav.goTo(c.x, y + 1, c.z) then
-    if cfg.build.skipOccupied and turtle.detectDown() then return "skipped" end
-    if tryPlace(block, turtle.placeDown) then return "placed" end
+--- Returns the outcome, and whether hovering over the cell turned out to be
+--- impossible -- which tells the caller not to keep trying it.
+function build.placeCell(cfg, cells, c, y, block, indexOf, filled, skipOverhead)
+  local overheadFailed = false
+
+  if not skipOverhead then
+    if nav.goTo(c.x, y + 1, c.z) then
+      if cfg.build.skipOccupied and turtle.detectDown() then return "skipped" end
+      if tryPlace(block, turtle.placeDown) then return "placed" end
+    else
+      overheadFailed = true
+    end
   end
 
   indexOf = indexOf or build.indexMap(cells)
   for _, n in ipairs(approaches(cells, indexOf, c, filled)) do
     if nav.goTo(n.x, y, n.z) then
       nav.turnTo(n.h)
-      if cfg.build.skipOccupied and turtle.detect() then return "skipped" end
-      if tryPlace(block, turtle.place) then return "placed" end
+      if cfg.build.skipOccupied and turtle.detect() then
+        return "skipped", overheadFailed
+      end
+      if tryPlace(block, turtle.place) then return "placed", overheadFailed end
     end
   end
 
-  return "missed"
+  return "missed", overheadFailed
 end
 
 --[[--------------------------------------------------------------------------
@@ -784,6 +794,13 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
     -- at the end of the course, by which time whatever it was has wandered off.
     local blocked = {}
 
+    -- Placing normally means hovering over the cell, but on the top course of
+    -- a band the course above is another turtle's and already built. The trip
+    -- up is then wasted on every single cell, and worst at the corners, where
+    -- the sideways fallback has to climb back down again. It fails the same way
+    -- for the whole course, so once is enough to learn it.
+    local noHover = false
+
     print(("Course %d/%d  %s")
           :format(layer, to, shortName(block)))
 
@@ -832,9 +849,11 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
           if not fine then return false, ferr end
         end
 
-        local cell    = cells[idx]
-        local outcome = build.placeCell(cfg, cells, cell, y, block,
-                                        indexOf, filled)
+        local cell = cells[idx]
+        local outcome, overhead = build.placeCell(cfg, cells, cell, y, block,
+                                                  indexOf, filled, noHover)
+        if overhead then noHover = true end
+
         if outcome == "placed" then
           placed = placed + 1
           filled[cell.x .. "," .. cell.z] = true
@@ -872,9 +891,11 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
           if got == 0 then break end
         end
 
-        local cell    = cells[i]
-        local outcome = build.placeCell(cfg, cells, cell, y, block,
-                                        indexOf, filled)
+        local cell = cells[i]
+        local outcome, overhead = build.placeCell(cfg, cells, cell, y, block,
+                                                  indexOf, filled, noHover)
+        if overhead then noHover = true end
+
         if outcome == "placed" then
           placed = placed + 1
           filled[cell.x .. "," .. cell.z] = true
@@ -1021,6 +1042,7 @@ function build.seal(cfg, cells, block)
   for y = 0, base - 1 do
     local at     = 1
     local filled = {}
+    local noHover = false
     print(("Sealing level %d of %d"):format(y + 1, base))
 
     while at <= #order do
@@ -1038,9 +1060,11 @@ function build.seal(cfg, cells, block)
           if got == 0 and err then return false, err end
         end
 
-        local cell    = cells[order[at]]
-        local outcome = build.placeCell(cfg, cells, cell, y, block,
-                                        indexOf, filled)
+        local cell = cells[order[at]]
+        local outcome, overhead = build.placeCell(cfg, cells, cell, y, block,
+                                                  indexOf, filled, noHover)
+        if overhead then noHover = true end
+
         if outcome == "placed" then
           placed = placed + 1
         elseif outcome == "skipped" then
