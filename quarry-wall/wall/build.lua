@@ -367,7 +367,17 @@ function build.park(cfg, keepName, keepMax)
       end
       if drop > 0 then
         turtle.select(s)
-        if not nav.dropAt(spec, drop) then return false end
+        nav.dropAt(spec, drop)
+
+        -- turtle.drop() reports success when it moved only PART of a stack,
+        -- which happens as soon as the chest is nearly full. Taking that as
+        -- "cleared" leaves items on board, and the next craft is refused with
+        -- a stray in a slot nobody put there. Check the slot, not the call.
+        local left = turtle.getItemCount(s)
+        if left > 0 and not (keepName and inv.nameAt(s) == keepName) then
+          return false, ("the overflow chest is full -- %d x %s would not fit")
+                        :format(left, tostring(inv.nameAt(s)))
+        end
       end
     end
   end
@@ -464,9 +474,8 @@ function build.restock(cfg, block, want, stillNeeded)
   if not ok then return 0, err end
 
   if block == craft.RAW then
-    if not build.park(cfg, block, want) then
-      return 0, "could not clear the inventory"
-    end
+    local ok2, perr2 = build.park(cfg, block, want)
+    if not ok2 then return 0, perr2 or "could not clear the inventory" end
     local pulled, perr = pullRaw(cfg, want)
     if not pulled then return inv.count(block), perr end
     return inv.count(block)
@@ -479,7 +488,10 @@ function build.restock(cfg, block, want, stillNeeded)
   end
 
   -- Everything off the turtle: it has to be bare to craft at all.
-  if not build.park(cfg) then return 0, "could not clear the inventory" end
+  local cleared, cerr = build.park(cfg)
+  if not cleared then
+    return 0, cerr or "could not clear the inventory"
+  end
 
   -- Some of what we want may already be made and waiting.
   local shortfall = want - build.readyInOverflow(cfg, block)
@@ -494,7 +506,10 @@ function build.restock(cfg, block, want, stillNeeded)
     local made, cerr = craft.runBatch(plan)
     if not made then return 0, cerr end
 
-    if not build.park(cfg) then return 0, "could not park the finished batch" end
+    local parked, perr = build.park(cfg)
+    if not parked then
+      return 0, perr or "could not park the finished batch"
+    end
     shortfall = shortfall - plan.out
   end
 

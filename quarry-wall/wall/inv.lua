@@ -189,7 +189,8 @@ function inv.stageOnly(cellList, steps)
 
   for _, s in ipairs(inv.ALL) do
     if not isCell[s] and turtle.getItemCount(s) > 0 then
-      return false, ("slot %d still holds %s -- craft would be refused")
+      return false, ("slot %d still holds %s -- craft would be refused. "
+                  .. "Something was left on board; is the overflow chest full?")
                     :format(s, tostring(inv.nameAt(s)))
     end
   end
