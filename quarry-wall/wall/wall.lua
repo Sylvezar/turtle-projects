@@ -233,6 +233,9 @@ end
 --- Trace the ring, resolve the pattern, and lay this turtle's share. Shared
 --- by `build` (numbers typed in) and `join` (numbers handed over by radio).
 local function runBuild(turtles, index, courses, yes)
+  local at, aerr = build.checkStation(cfg)
+  if not at then die(aerr) end
+
   print("Tracing the marker ring...")
   local cells, err = ring.survey(cfg, false)
   if not cells then die(err) end
@@ -340,6 +343,9 @@ function cmd.resume()
 
   nav.setPos({ x = 0, y = 0, z = 0, h = 0 })
 
+  local at, aerr = build.checkStation(cfg)
+  if not at then die(aerr) end
+
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end
 
@@ -377,6 +383,9 @@ function cmd.seal(args)
     print("There is no gap under the wall to seal.")
     return
   end
+
+  local at, aerr = build.checkStation(cfg)
+  if not at then die(aerr) end
 
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end

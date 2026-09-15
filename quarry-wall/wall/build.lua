@@ -253,6 +253,42 @@ end
 build.fuelToSpare = fuelToSpare
 
 --[[--------------------------------------------------------------------------
+  Am I actually at my station?
+
+  Position is tracked in memory, so whatever cell the turtle is standing in
+  when a program starts becomes its origin. Terminate a run out on the ring,
+  restart it there, and the turtle will cheerfully build a wall offset by
+  however far it had wandered.
+
+  The cheapest reliable tell is the supply chest: it is at a known offset, and
+  if there is no block there then this is not the station. Costs a turn and a
+  detect, and runs before anything is placed.
+----------------------------------------------------------------------------]]
+function build.checkStation(cfg)
+  local spec = cfg.station.supply
+  if not spec then return true end
+
+  if not nav.reach(spec) then
+    return false, "could not reach the supply chest position"
+  end
+
+  local side = spec.side or "front"
+  local there
+  if side == "up" then there = turtle.detectUp()
+  elseif side == "down" then there = turtle.detectDown()
+  else there = turtle.detect() end
+
+  if not there then
+    return false, "no supply chest where one should be -- put the turtle back "
+               .. "on its station facing the chests. If it was terminated part "
+               .. "way through a run, break it and place it again; it keeps "
+               .. "its files and inventory"
+  end
+
+  return true
+end
+
+--[[--------------------------------------------------------------------------
   Restocking
 ----------------------------------------------------------------------------]]
 

@@ -757,6 +757,24 @@ mock.clearEvents()
 
 section("guards")
 
+-- Terminated out on the ring and restarted there: the supply chest is not
+-- where the turtle thinks it is, and it must say so before placing anything.
+mock.reset()
+local gcells = buildQuarry(0, 0)
+station(SX, SZ, 0)
+
+local atHome, aerr = build.checkStation(cfg)
+ok(atHome, "at the station, the supply chest is found: " .. tostring(aerr))
+
+-- Same world, but the turtle believes a ring cell is its origin.
+mock.setTurtle(0, 1, 4, 0)
+nav.setPos({ x = 0, y = 0, z = 0, h = 0 })
+
+local astray, serr = build.checkStation(cfg)
+ok(not astray, "away from the station, it notices")
+ok(serr and serr:find("break it and place it again"),
+   "and says how to recover: " .. tostring(serr))
+
 -- A turtle handed no fuel cannot reach a fuel chest that needs a move.
 mock.reset()
 buildQuarry(0, 0)
