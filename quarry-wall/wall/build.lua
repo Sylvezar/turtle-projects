@@ -542,9 +542,9 @@ end
 
 local function tryPlace(block, placer)
   if not inv.selectItem(block) then return false end
-  for _ = 1, 3 do
+  for attempt = 1, 4 do
     if placer() then return true end
-    sleep(0.3)          -- probably a mob standing in the cell
+    if attempt < 4 then sleep(0.4) end   -- probably a mob standing in the cell
   end
   return false
 end
@@ -659,6 +659,12 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
     local idx    = (layer == from) and startIndex or 1
     local filled = {}
 
+    -- Cells that would not take a block first time round. A mob standing in
+    -- the cell is not a block, so it reads as empty and simply refuses the
+    -- placement -- and the pit is dark, so this happens. They are tried again
+    -- at the end of the course, by which time whatever it was has wandered off.
+    local blocked = {}
+
     print(("Course %d/%d  %s")
           :format(layer, to, shortName(block)))
 
@@ -712,15 +718,13 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
                                         indexOf, filled)
         if outcome == "placed" then
           placed = placed + 1
+          filled[cell.x .. "," .. cell.z] = true
         elseif outcome == "skipped" then
           skipped = skipped + 1
+          filled[cell.x .. "," .. cell.z] = true
           logHole(cfg, "course", layer, idx, perLayer, "occupied")
         else
-          missed = missed + 1
-          logHole(cfg, "course", layer, idx, perLayer, "UNREACHABLE")
-        end
-        if outcome ~= "missed" then
-          filled[cell.x .. "," .. cell.z] = true
+          blocked[#blocked + 1] = idx
         end
 
         idx = idx + 1
@@ -734,6 +738,34 @@ function build.run(cfg, cells, layers, from, to, startIndex, meta)
         if sinceSave >= cfg.build.saveEvery then
           save(layer, idx)
           sinceSave = 0
+        end
+      end
+    end
+
+    -- Second go at anything that was blocked. Only what fails twice, minutes
+    -- apart, is really a hole.
+    if #blocked > 0 then
+      print(("  %d cells were blocked; trying again"):format(#blocked))
+
+      for _, i in ipairs(blocked) do
+        if inv.count(block) == 0 then
+          local got = build.restock(cfg, block, math.min(cap, #blocked), still)
+          if got == 0 then break end
+        end
+
+        local cell    = cells[i]
+        local outcome = build.placeCell(cfg, cells, cell, y, block,
+                                        indexOf, filled)
+        if outcome == "placed" then
+          placed = placed + 1
+          filled[cell.x .. "," .. cell.z] = true
+        elseif outcome == "skipped" then
+          skipped = skipped + 1
+          filled[cell.x .. "," .. cell.z] = true
+          logHole(cfg, "course", layer, i, perLayer, "occupied")
+        else
+          missed = missed + 1
+          logHole(cfg, "course", layer, i, perLayer, "UNREACHABLE")
         end
       end
     end
