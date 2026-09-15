@@ -120,6 +120,38 @@ function report.id()
   return 0
 end
 
+--[[--------------------------------------------------------------------------
+  Wait for a message the monitor addresses to us.
+
+  Re-announces on a timer so a turtle started before the monitor -- or one
+  whose first shout was missed -- still gets picked up, and so a long wait
+  shows something rather than looking hung.
+----------------------------------------------------------------------------]]
+function report.await(matches, announce, onWait)
+  if not open then return nil, "no modem fitted" end
+
+  local me = report.id()
+  if announce then announce() end
+
+  local timer = os.startTimer(3)
+
+  while true do
+    local event = { os.pullEvent() }
+
+    if event[1] == "timer" and event[2] == timer then
+      if announce then announce() end
+      if onWait then onWait() end
+      timer = os.startTimer(3)
+
+    elseif event[1] == "rednet_message" then
+      local msg = event[3]
+      if type(msg) == "table" and (msg.to == nil or msg.to == me) then
+        if matches(msg) then return msg end
+      end
+    end
+  end
+end
+
 function report.enlist()
   send({ kind = "enlist", id = report.id(),
          label = os.getComputerLabel and os.getComputerLabel() or nil })
@@ -135,29 +167,8 @@ end
   Returns the assignment table, or nil if the turtle was told to stand down.
 ----------------------------------------------------------------------------]]
 function report.awaitAssignment(onWait)
-  if not open then return nil, "no modem fitted" end
-
-  local me = report.id()
-  report.enlist()
-
-  local timer = os.startTimer(3)
-
-  while true do
-    local event = { os.pullEvent() }
-
-    if event[1] == "timer" and event[2] == timer then
-      report.enlist()
-      if onWait then onWait() end
-      timer = os.startTimer(3)
-
-    elseif event[1] == "rednet_message" then
-      local msg = event[3]
-      if type(msg) == "table" and msg.to == me then
-        if msg.kind == "assign" then return msg end
-        if msg.kind == "standdown" then return nil, "told to stand down" end
-      end
-    end
-  end
+  return report.await(function(m) return m.kind == "assign" end,
+                      report.enlist, onWait)
 end
 
 return report

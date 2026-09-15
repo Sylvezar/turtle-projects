@@ -17,7 +17,7 @@ local config = {}
   -- which is exactly how eight turtles ended up without an overflow chest
   configured and died on their first craft.
 ----------------------------------------------------------------------------]]
-config.version = 2
+config.version = 3
 
 --[[--------------------------------------------------------------------------
   THE PATTERN
@@ -78,6 +78,7 @@ config.pattern = {
   it with.
 ----------------------------------------------------------------------------]]
 config.ring = {
+  name   = "outer",
   block  = "glass",
   anchor = "sea_lantern",
 
@@ -97,6 +98,36 @@ config.ring = {
   -- walking the whole perimeter again on every resume and restart.
   -- `wall scan` always traces for real and refreshes it.
   cache = true,
+}
+
+--[[--------------------------------------------------------------------------
+  THE INNER RING
+
+  A second, small ring of markers laid round the launch pad, one level below
+  the turtles -- same idea as the big one, different blocks so the two cannot
+  be confused. Use something you have not built the pad or the outer ring from;
+  glass panes read differently from glass.
+
+  This is what lets the turtles agree on coordinates without GPS. Tracing is
+  anchored and wound the same way every time, so any two turtles walking this
+  little ring come back with the same cells in the same order -- and two cells
+  known to be the same block is enough to work out the rotation and offset
+  between their two coordinate systems.
+
+  So one turtle walks the big ring once and everyone else translates its answer
+  into their own numbers without leaving the pad. Seven laps of the perimeter
+  become seven laps of something twenty blocks round.
+
+  Set to nil to go back to every turtle tracing the big ring itself.
+----------------------------------------------------------------------------]]
+config.innerRing = {
+  name   = "inner",
+  block  = "glass_pane",
+  anchor = "ochre_froglight",
+
+  searchDistance = 32,
+  expectCells    = nil,
+  cache          = true,
 }
 
 --[[--------------------------------------------------------------------------

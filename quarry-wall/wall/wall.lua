@@ -27,6 +27,7 @@ local scan    = require("scan")
 local pattern = require("pattern")
 local build   = require("build")
 local report  = require("report")
+local frame   = require("frame")
 
 local function shortName(n) return (n:gsub("^minecraft:", "")) end
 
@@ -198,7 +199,7 @@ function cmd.scan(args)
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end
 
-  local cells, err = ring.survey(cfg, strict)
+  local cells, err = ring.survey(cfg.ring, { strict = strict })
   if not cells then die(err) end
 
   local d = ring.describe(cells)
@@ -244,20 +245,24 @@ end
 
 --- Trace the ring, resolve the pattern, and lay this turtle's share. Shared
 --- by `build` (numbers typed in) and `join` (numbers handed over by radio).
-local function runBuild(turtles, index, courses, yes)
+local function runBuild(turtles, index, courses, yes, known)
   local at, aerr = build.checkStation(cfg)
   if not at then die(aerr) end
 
-  -- Say so before tracing, not after. Tracing is a full lap of the ring and
-  -- the turtle was previously silent throughout, so the monitor could not tell
-  -- a turtle working from a turtle that had died -- and released the next one
-  -- on a timer into the middle of this one's lap.
   report.identify({ turtle = index, turtles = turtles, courses = courses })
-  report.now({ state = "tracing" })
 
-  print("Tracing the marker ring...")
-  local cells, err = ring.survey(cfg, false)
-  if not cells then die(err) end
+  local cells = known
+  if not cells then
+    -- Say so before tracing, not after. Tracing is a full lap of the ring and
+    -- the turtle was previously silent throughout, so the monitor could not
+    -- tell a turtle working from one that had died.
+    report.now({ state = "tracing" })
+    print("Tracing the marker ring...")
+
+    local err
+    cells, err = ring.survey(cfg.ring)
+    if not cells then die(err) end
+  end
 
   local d = ring.describe(cells)
   report.now({ state = "traced", cells = d.count })
@@ -326,6 +331,20 @@ end
 
   Needs a modem. `wall build` remains the way to run without one.
 ----------------------------------------------------------------------------]]
+--[[--------------------------------------------------------------------------
+  join -- take a slice from the monitor, and get the ring without walking it.
+
+  Walking the big ring takes a lap of the perimeter, and eight turtles cannot
+  do it at once without blocking each other's traces. Doing it one at a time is
+  most of the launch.
+
+  So only one turtle walks it. Everyone traces the small ring round the launch
+  pad instead -- twenty-odd blocks -- and because a trace is anchored and wound
+  the same way every time, two turtles' inner traces are the same cells in the
+  same order. That is enough to work out the rotation and offset between their
+  coordinate systems, and translate the scout's big ring into each turtle's own
+  numbers without anyone leaving the pad.
+----------------------------------------------------------------------------]]
 function cmd.join()
   if not report.open(cfg) then
     die("join needs a wireless modem fitted -- use `wall build` instead")
@@ -334,22 +353,91 @@ function cmd.join()
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end
 
-  print(("Turtle #%d waiting for the monitor to assign a slot."):format(report.id()))
-  print("Ctrl+T to give up.")
+  local at, aerr = build.checkStation(cfg)
+  if not at then die(aerr) end
 
-  local dots = 0
-  local assign, aerr = report.awaitAssignment(function()
-    dots = dots + 1
-    if dots % 5 == 0 then print("  still waiting...") end
-  end)
+  local me = report.id()
+  print(("Turtle #%d waiting for the monitor."):format(me))
 
-  if not assign then die(aerr or "no assignment received") end
+  local role = report.await(function(m) return m.kind == "role" end,
+                            report.enlist)
+  if not role then die("no role received") end
 
-  print("")
+  local inner = cfg.innerRing
+  if not inner then die("station has no innerRing configured") end
+
+  print("Tracing the inner ring...")
+  report.now({ state = "inner" })
+
+  local innerMine, ierr = ring.survey(inner)
+  if not innerMine then die("inner ring: " .. tostring(ierr)) end
+  print(("  %d cells"):format(#innerMine))
+
+  local mine
+
+  if role.role == "scout" then
+    print("Scouting the wall ring...")
+    report.now({ state = "scouting" })
+
+    local outerErr
+    mine, outerErr = ring.survey(cfg.ring)
+    if not mine then die("wall ring: " .. tostring(outerErr)) end
+    print(("  %d cells"):format(#mine))
+
+    -- Hand both rings over and sit still out here: the others are using the
+    -- pad, and a turtle wandering back through them would spoil their traces.
+    report.now({ kind = "scanned", role = "scout",
+                 inner = frame.flatten(innerMine),
+                 outer = frame.flatten(mine) })
+
+    print("Waiting for the others to finish...")
+    report.await(function(m) return m.kind == "comehome" end)
+
+    if not nav.goHome() then die("could not get back to the station") end
+    report.now({ kind = "athome" })
+
+  else
+    if not nav.goHome() then die("could not get back to the station") end
+    report.now({ kind = "scanned", role = "inner",
+                 inner = frame.flatten(innerMine) })
+
+    print("Waiting for the wall ring...")
+    local rings = report.await(function(m) return m.kind == "rings" end)
+    if not rings then die("no ring data received") end
+
+    local theirInner = frame.unflatten(rings.inner)
+    local theirOuter = frame.unflatten(rings.outer)
+    if not theirInner or not theirOuter then die("ring data was unreadable") end
+
+    local t, terr = frame.derive(innerMine, theirInner)
+    if not t then die("could not line up with the scout: " .. tostring(terr)) end
+
+    mine = frame.map(t, theirOuter)
+
+    local sane, serr = ring.checkShape(mine)
+    if not sane then die("the shared ring does not hold up: " .. tostring(serr)) end
+
+    print(("Wall ring: %d cells, worked out without walking it."):format(#mine))
+  end
+
+  if cfg.ring.expectCells and #mine ~= cfg.ring.expectCells then
+    die(("ring has %d cells, config expects %d")
+        :format(#mine, cfg.ring.expectCells))
+  end
+
+  report.now({ kind = "ready", cells = #mine })
+
+  local assign = report.await(function(m) return m.kind == "assign" end)
+  if not assign then die("no assignment received") end
+
   print(("Assigned slot %d of %d, %d courses.")
         :format(assign.index, assign.turtles, assign.courses))
 
-  runBuild(assign.turtles, assign.index, assign.courses, true)
+  -- Everyone is released together now that no one needs to walk the ring, but
+  -- leaving in the same tick from a tight station is asking for a jam.
+  sleep(assign.index * 2)
+
+  runBuild(assign.turtles, assign.index, assign.courses, true, mine)
 end
 
 function cmd.resume()
@@ -370,7 +458,7 @@ function cmd.resume()
   if not ok then die(ferr) end
 
   print("Re-tracing the ring...")
-  local cells, err = ring.survey(cfg, false)
+  local cells, err = ring.survey(cfg.ring)
   if not cells then die(err) end
 
   -- The trace is anchored and wound the same way every time, so the saved
@@ -411,7 +499,7 @@ function cmd.seal(args)
   if not ok then die(ferr) end
 
   print("Tracing the marker ring...")
-  local cells, err = ring.survey(cfg, false)
+  local cells, err = ring.survey(cfg.ring)
   if not cells then die(err) end
 
   local layers = pattern.layers(cfg.pattern, tonumber(args[1]) or cfg.height.suggest)

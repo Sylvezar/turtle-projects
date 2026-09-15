@@ -34,11 +34,11 @@ ring.full = full
 
 --- What kind of marker, if any, is directly below the turtle.
 --- Returns "ring", "anchor", or nil.
-local function kindBelow(cfg)
+local function kindBelow(spec)
   local ok, block = turtle.inspectDown()
   if not ok then return nil end
-  if block.name == full(cfg.ring.block)  then return "ring"   end
-  if block.name == full(cfg.ring.anchor) then return "anchor" end
+  if block.name == full(spec.block)  then return "ring"   end
+  if block.name == full(spec.anchor) then return "anchor" end
   return nil
 end
 
@@ -47,10 +47,10 @@ ring.kindBelow = kindBelow
 --- Step one block in direction `h` and report what marker is underneath.
 --- Steps back if there is none, so the turtle always ends up where it was
 --- unless it found something.
-local function probeStep(cfg, h)
+local function probeStep(spec, h)
   nav.turnTo(h)
   if not nav.forward() then return nil end
-  local kind = kindBelow(cfg)
+  local kind = kindBelow(spec)
   if kind then return kind end
   nav.back()
   return nil
@@ -58,11 +58,11 @@ end
 
 --- Which of the four neighbours are ring cells. Costs two moves per miss, so
 --- it is only used for the start cell and for the strict check.
-local function neighbours(cfg, exclude)
+local function neighbours(spec, exclude)
   local found = {}
   for h = 0, 3 do
     if h ~= exclude then
-      local kind = probeStep(cfg, h)
+      local kind = probeStep(spec, h)
       if kind then
         found[#found + 1] = { h = h, kind = kind }
         nav.turnTo((h + 2) % 4)
@@ -80,8 +80,8 @@ end
   starting point, never `anchor` -- station floors are commonly made of the
   same stuff as the anchor, and a solid platform is not a ring.
 ----------------------------------------------------------------------------]]
-function ring.find(cfg)
-  local far = cfg.ring.searchDistance
+function ring.find(spec)
+  local far = spec.searchDistance or 128
 
   -- Behind first: with the turtle facing the chest stack, that is the one
   -- direction guaranteed not to start by walking into the station.
@@ -90,13 +90,13 @@ function ring.find(cfg)
     nav.turnTo(h)
     for _ = 1, far do
       if not nav.forward() then break end
-      if kindBelow(cfg) == "ring" then return true end
+      if kindBelow(spec) == "ring" then return true end
     end
   end
 
   nav.goHome()
   return false, ("could not find any %s within %d blocks of the station")
-                :format(full(cfg.ring.block), far)
+                :format(full(spec.block), far)
 end
 
 --[[--------------------------------------------------------------------------
@@ -111,14 +111,14 @@ end
   otherwise happily run out along one lane and back along the other). It costs
   several moves per cell, so `wall scan` uses it and `wall build` does not.
 ----------------------------------------------------------------------------]]
-function ring.trace(cfg, strict)
+function ring.trace(spec, strict)
   local start = nav.pos()
-  local first = kindBelow(cfg)
+  local first = kindBelow(spec)
   if not first then return nil, "not standing on the ring" end
 
   local cells = { { x = start.x, z = start.z, kind = first } }
 
-  local startNeighbours = neighbours(cfg)
+  local startNeighbours = neighbours(spec)
   if #startNeighbours == 0 then
     return nil, "the ring is a single isolated block"
   end
@@ -128,17 +128,17 @@ function ring.trace(cfg, strict)
   end
 
   local dir = startNeighbours[1].h
-  local kind = probeStep(cfg, dir)
+  local kind = probeStep(spec, dir)
   if not kind then return nil, "lost the ring on the first step" end
   cells[2] = { x = nav.pos().x, z = nav.pos().z, kind = kind }
 
-  local limit = 4 * cfg.ring.searchDistance + 16
+  local limit = 4 * (spec.searchDistance or 128) + 16
 
   while true do
     local came = (dir + 2) % 4
 
     if strict then
-      local n = neighbours(cfg, came)
+      local n = neighbours(spec, came)
       if #n ~= 1 then
         local p = nav.pos()
         return nil, ("the ring is ambiguous at %d,%d -- %d ways on, expected 1")
@@ -148,7 +148,7 @@ function ring.trace(cfg, strict)
 
     local moved
     for _, h in ipairs({ dir, (dir + 1) % 4, (dir + 3) % 4 }) do
-      local k = probeStep(cfg, h)
+      local k = probeStep(spec, h)
       if k then dir, moved = h, k break end
     end
 
@@ -231,35 +231,39 @@ end
   walk the whole ring.
 ----------------------------------------------------------------------------]]
 
-local CACHE = "wall_ring.txt"
-
-function ring.clearCache()
-  if fs.exists(CACHE) then fs.delete(CACHE) end
+local function cacheFile(spec)
+  return "wall_ring_" .. (spec.name or "outer") .. ".txt"
 end
 
-local function saveCache(cfg, cells)
-  local f = fs.open(CACHE, "w")
+function ring.clearCache(spec)
+  local path = cacheFile(spec)
+  if fs.exists(path) then fs.delete(path) end
+end
+
+local function saveCache(spec, cells)
+  local f = fs.open(cacheFile(spec), "w")
   if not f then return end
   f.write(textutils.serialize({
-    block = cfg.ring.block, anchor = cfg.ring.anchor,
+    block = spec.block, anchor = spec.anchor,
     count = #cells, cells = cells,
   }))
   f.close()
 end
 
-local function loadCache(cfg)
-  if not fs.exists(CACHE) then return nil end
+local function loadCache(spec)
+  local path = cacheFile(spec)
+  if not fs.exists(path) then return nil end
 
-  local f = fs.open(CACHE, "r")
+  local f = fs.open(path, "r")
   local saved = textutils.unserialize(f.readAll())
   f.close()
 
   if type(saved) ~= "table" or type(saved.cells) ~= "table" then return nil end
-  if saved.block ~= cfg.ring.block or saved.anchor ~= cfg.ring.anchor then
+  if saved.block ~= spec.block or saved.anchor ~= spec.anchor then
     return nil            -- the markers were changed; do not trust it
   end
   if #saved.cells ~= saved.count or #saved.cells < 3 then return nil end
-  if cfg.ring.expectCells and #saved.cells ~= cfg.ring.expectCells then
+  if spec.expectCells and #saved.cells ~= spec.expectCells then
     return nil
   end
 
@@ -268,32 +272,33 @@ end
 
 --- Fly to where the list says the anchor is and check it is really there. If
 --- the turtle has moved, or the ring has, this is what notices.
-local function cacheStillGood(cfg, cells)
+local function cacheStillGood(spec, cells)
   local a = cells[1]
   if not a then return false end
   if not nav.goTo(a.x, 0, a.z) then return false end
-  return kindBelow(cfg) == "anchor"
+  return kindBelow(spec) == "anchor"
 end
 
 --- Find it, walk it, and hand back the canonical cell list.
-function ring.survey(cfg, strict)
+function ring.survey(spec, opts)
+  opts = opts or {}
   -- A saved lap, if there is one and the anchor is still where it says.
-  if not strict and cfg.ring.cache ~= false then
-    local cached = loadCache(cfg)
+  if not opts.strict and spec.cache ~= false then
+    local cached = loadCache(spec)
     if cached then
-      if cacheStillGood(cfg, cached) then
+      if cacheStillGood(spec, cached) then
         nav.goHome()
         return cached
       end
-      ring.clearCache()
+      ring.clearCache(spec)
       nav.goHome()
     end
   end
 
-  local found, err = ring.find(cfg)
+  local found, err = ring.find(spec)
   if not found then return nil, err end
 
-  local cells, terr = ring.trace(cfg, strict)
+  local cells, terr = ring.trace(spec, opts.strict)
   if not cells then nav.goHome() return nil, terr end
 
   local canon, cerr = ring.canonicalise(cells)
@@ -304,14 +309,14 @@ function ring.survey(cfg, strict)
   local sane, serr = ring.checkShape(canon)
   if not sane then return nil, serr end
 
-  local want = cfg.ring.expectCells
+  local want = spec.expectCells
   if want and #canon ~= want then
-    return nil, ("traced %d cells but config says the ring has %d -- something "
+    return nil, ("traced %d cells but config says %s has %d -- something "
               .. "blocked the trace part way round. Clear the pit and try again")
-              :format(#canon, want)
+              :format(#canon, spec.name or "the ring", want)
   end
 
-  saveCache(cfg, canon)
+  saveCache(spec, canon)
   return canon
 end
 

@@ -131,7 +131,7 @@ end
 section("Lua 5.2 compatibility")
 
 local SOURCES = { "config", "nav", "inv", "craft", "ring", "scan", "pattern",
-                  "build", "report", "wall", "monitor", "crafttest" }
+                  "build", "report", "wall", "monitor", "crafttest", "frame" }
 
 local FORBIDDEN = {
   { "//",              "integer division -- use math.floor" },
@@ -326,7 +326,7 @@ mock.reset()
 local expected = buildQuarry(0, 0)
 station(SX, SZ, 0)
 
-local cells, terr = ring.survey(cfg, true)      -- strict
+local cells, terr = ring.survey(cfg.ring, { strict = true })      -- strict
 ok(cells ~= nil, "traced the ring: " .. tostring(terr))
 
 if cells then
@@ -395,6 +395,83 @@ if cells then
 end
 
 --[[--------------------------------------------------------------------------
+  5c. Lining two turtles up from a shared ring
+----------------------------------------------------------------------------]]
+
+section("frame transforms")
+
+local frame = require("frame")
+
+--- Rewrite a cell list as another turtle standing at (ox,oz) facing `h` would
+--- have traced it -- the inverse of what toWorld does.
+local function asSeenFrom(cellList, wx, wz, ox, oz, h)
+  local DXl = { [0] = 0, [1] = 1, [2] = 0, [3] = -1 }
+  local DZl = { [0] = 1, [1] = 0, [2] = -1, [3] = 0 }
+  local out = {}
+  for i, c in ipairs(cellList) do
+    -- world position of this cell
+    local worldX = wx + c.x
+    local worldZ = wz + c.z
+    -- express it in the other turtle's frame
+    local dx, dz = worldX - ox, worldZ - oz
+    local fx, fz = DXl[h], DZl[h]
+    local rx, rz = DXl[(h + 1) % 4], DZl[(h + 1) % 4]
+    out[i] = { x = dx * rx + dz * rz, z = dx * fx + dz * fz, kind = c.kind }
+  end
+  return out
+end
+
+-- Two turtles, different places and facings, tracing the same physical ring.
+mock.reset()
+buildQuarry(0, 0)
+
+station(SX, SZ, 0)
+local frameA = ring.survey(cfg.ring)
+ok(frameA ~= nil, "turtle A traced the ring")
+
+mock.reset()
+buildQuarry(0, 0)
+station(3, 6, 1)
+local frameB = ring.survey(cfg.ring)
+ok(frameB ~= nil, "turtle B traced the ring")
+
+if frameA and frameB then
+  eq(#frameA, #frameB, "both traces are the same length")
+
+  local t, terr = frame.derive(frameB, frameA)
+  ok(t ~= nil, "a transform lines A onto B: " .. tostring(terr))
+
+  if t then
+    local mapped = frame.map(t, frameA)
+    local wrongCell = 0
+    for i = 1, #mapped do
+      if mapped[i].x ~= frameB[i].x or mapped[i].z ~= frameB[i].z then
+        wrongCell = wrongCell + 1
+      end
+    end
+    eq(wrongCell, 0, "every one of A's cells lands on B's")
+
+    -- And the same transform is what turns the scout's wall ring into B's
+    -- numbers, which is the whole point.
+    local flat = frame.flatten(frameA)
+    eq(#flat, #frameA * 2, "flattening gives two numbers per cell")
+    local back = frame.unflatten(flat)
+    eq(#back, #frameA, "and unflattening gives them back")
+    eq(back[1].kind, "anchor", "the anchor is still first")
+  end
+end
+
+-- Traces of different rings must be refused, not fudged.
+local shifted = {}
+for i, c in ipairs(frameA or {}) do shifted[i] = { x = c.x, z = c.z } end
+if #shifted > 2 then
+  shifted[3] = { x = shifted[3].x + 5, z = shifted[3].z }
+  local bad, badErr = frame.derive(frameA, shifted)
+  ok(bad == nil, "a mismatched trace is refused")
+  ok(badErr ~= nil, "and says so: " .. tostring(badErr))
+end
+
+--[[--------------------------------------------------------------------------
   6. Different turtles, different places, same ring
 ----------------------------------------------------------------------------]]
 
@@ -407,7 +484,7 @@ for _, setup in ipairs({ { SX, SZ, 0 }, { 3, 6, 1 }, { 7, 2, 2 }, { 2, 2, 3 } })
   buildQuarry(0, 0)
   station(setup[1], setup[2], setup[3])
 
-  local c, err = ring.survey(cfg, false)
+  local c, err = ring.survey(cfg.ring)
   ok(c ~= nil, ("turtle at %d,%d facing %d traced it: %s")
                :format(setup[1], setup[2], setup[3], tostring(err)))
 
@@ -443,7 +520,7 @@ mock.reset()
 buildQuarry(0, 0)
 station(SX, SZ, 0)
 
-local hcells = ring.survey(cfg, false)
+local hcells = ring.survey(cfg.ring)
 
 -- Roof mode: climb until the ceiling stops us. Turtle level is world y=1 and
 -- the ceiling is at ROOF, so the topmost occupiable level is ROOF-1.
@@ -469,7 +546,7 @@ for x = -3, W + 2 do
   for z = -3, D + 2 do mock.setBlock(x, ROOF, z, nil) end   -- take the roof off
 end
 station(SX, SZ, 0)
-local rimCells = ring.survey(cfg, false)
+local rimCells = ring.survey(cfg.ring)
 cfg.height.stopAt = "rim"
 local rimCourses, rimErr = scan.height(cfg, rimCells)
 ok(rimCourses ~= nil, "rim mode measures an open pit: " .. tostring(rimErr))
@@ -512,7 +589,7 @@ local allOk   = true
 
 for i = 1, TURTLES do
   station(SX, SZ, 0)
-  local c = ring.survey(cfg, false)
+  local c = ring.survey(cfg.ring)
   local from, to = build.band(COURSES, TURTLES, i)
   local meta = { courses = COURSES, turtles = TURTLES, turtle = i }
 
@@ -632,7 +709,7 @@ end
 section("sealing the gap under the base")
 
 station(SX, SZ, 0)
-local scells = ring.survey(cfg, false)
+local scells = ring.survey(cfg.ring)
 local sdone, sres = build.seal(cfg, scells, M("deepslate_tiles"))
 ok(sdone, "seal finished: " .. tostring(sres))
 
@@ -660,7 +737,7 @@ mock.reset()
 local rcells = buildQuarry(0, 0)
 station(SX, SZ, 0)
 
-local rc = ring.survey(cfg, false)
+local rc = ring.survey(cfg.ring)
 local rlayers = pattern.layers(cfg.pattern, COURSES)
 local RFROM, RTO, RIDX = 5, 8, 10
 local meta = { courses = COURSES, turtles = TURTLES, turtle = 2 }
@@ -704,7 +781,7 @@ ok(not report.open(cfg), "no modem, so reporting stays off")
 mock.reset()
 local rr = buildQuarry(0, 0)
 station(SX, SZ, 0)
-local rcells0 = ring.survey(cfg, false)
+local rcells0 = ring.survey(cfg.ring)
 build.run(cfg, rcells0, pattern.layers(cfg.pattern, 4), 1, 2, 1,
           { courses = 4, turtles = 1, turtle = 1 })
 eq(#mock.sent(), 0, "a turtle with no modem broadcasts nothing")
@@ -721,7 +798,7 @@ mock.reset()
 local rr2 = buildQuarry(0, 0)
 mock.setBlock(0, 6, 3, "minecraft:mossy_cobblestone")   -- one deliberate hole
 station(SX, SZ, 0)
-local rcells = ring.survey(cfg, false)
+local rcells = ring.survey(cfg.ring)
 
 build.run(cfg, rcells, pattern.layers(cfg.pattern, 6), 1, 5, 1,
           { courses = 6, turtles = 1, turtle = 3, fresh = true })
@@ -985,7 +1062,8 @@ ok(ichunk ~= nil, "install.lua compiles: " .. tostring(ierr))
 if ichunk then
   -- Wipe anything the earlier tests left, then unpack for real.
   for _, name in ipairs({ "config", "nav", "inv", "craft", "ring", "scan",
-                          "pattern", "build", "report", "wall", "monitor" }) do
+                          "pattern", "build", "report", "wall", "monitor",
+                          "frame" }) do
     fs.delete("wall/" .. name .. ".lua")
   end
 
@@ -994,7 +1072,8 @@ if ichunk then
 
   local checked, mismatched = 0, 0
   for _, name in ipairs({ "config", "nav", "inv", "craft", "ring", "scan",
-                          "pattern", "build", "report", "wall", "monitor" }) do
+                          "pattern", "build", "report", "wall", "monitor",
+                          "frame" }) do
     local path = "wall/" .. name .. ".lua"
 
     if not fs.exists(path) then
@@ -1027,7 +1106,7 @@ if ichunk then
     end
   end
 
-  eq(checked, 11, "all eleven files unpacked")
+  eq(checked, 12, "all twelve source files unpacked")
   eq(mismatched, 0, "every unpacked file matches its source exactly")
 
   -- A reinstall must not clobber an edited config.
