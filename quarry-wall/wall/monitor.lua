@@ -161,6 +161,15 @@ local function handle(msg)
     return
   end
 
+  if msg.kind == "padclear" and who == 1 then
+    -- The scout has cleared the launch pad; the others can start on it now.
+    if not nextInner then
+      nextInner = 2
+      sendNextInner()
+    end
+    return
+  end
+
   if msg.kind == "athome" and who == 1 then
     rednet.broadcast({ kind = "rings",
                        inner = scoutData.inner,
@@ -277,11 +286,13 @@ local function drawScan()
     if i == 1 then
       if phase == "share" then what = "back at the pad"
       elseif scoutData then what = "waiting out on the ring"
-      else what = "walking the wall ring" end
+      elseif nextInner then what = "walking the wall ring"
+      else what = "on the pad ring" end
     else
       if readyCells[i] then what = ("ready, %d cells"):format(readyCells[i])
       elseif innerDone[i] then what = "pad ring done"
       elseif nextInner and i == nextInner then what = "tracing the pad ring"
+      elseif not nextInner then what = "waiting for the pad"
       else what = "waiting" end
     end
     print((" %2d   id %-4s %s"):format(i, tostring(t.id), what))
@@ -363,10 +374,10 @@ local function beginLaunch()
 
   phase = "scan"
 
-  -- Turtle 1 walks the wall ring; the rest trace the pad ring one at a time.
+  -- Turtle 1 walks the wall ring. It has to trace the pad ring first, so the
+  -- rest wait until it says it is clear of the pad before starting on it.
   tell(waiting[1].id, { kind = "role", role = "scout" })
-  nextInner = 2
-  sendNextInner()
+  nextInner = nil
 end
 
 --[[-- loop ----------------------------------------------------------------]]

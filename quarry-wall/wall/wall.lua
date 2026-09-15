@@ -379,8 +379,13 @@ function cmd.join()
     print("Scouting the wall ring...")
     report.now({ state = "scouting" })
 
+    -- Nobody else may touch the pad ring until this turtle is away from it:
+    -- the scout traces the pad ring too, and two turtles on that little loop
+    -- at once is how the first attempt ended.
     local outerErr
-    mine, outerErr = ring.survey(cfg.ring)
+    mine, outerErr = ring.survey(cfg.ring, {
+      onFound = function() report.now({ kind = "padclear" }) end,
+    })
     if not mine then die("wall ring: " .. tostring(outerErr)) end
     print(("  %d cells"):format(#mine))
 

@@ -287,6 +287,7 @@ function ring.survey(spec, opts)
     local cached = loadCache(spec)
     if cached then
       if cacheStillGood(spec, cached) then
+        if opts.onFound then opts.onFound() end
         nav.goHome()
         return cached
       end
@@ -297,6 +298,10 @@ function ring.survey(spec, opts)
 
   local found, err = ring.find(spec)
   if not found then return nil, err end
+
+  -- Out at the ring now, which is the moment it is safe for anyone else to
+  -- start using the launch pad.
+  if opts.onFound then opts.onFound() end
 
   local cells, terr = ring.trace(spec, opts.strict)
   if not cells then nav.goHome() return nil, terr end
