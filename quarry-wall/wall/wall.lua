@@ -153,6 +153,16 @@ function cmd.check()
 
   local problems, needsCrafting = preflight(layers)
 
+  -- Written by the installer, so a turtle can say which build it is running
+  -- without reinstalling to find out.
+  local hasVersion, version = pcall(require, "version")
+  if hasVersion and type(version) == "table" then
+    print(("Build:     %s  (%s)"):format(tostring(version.build),
+                                         tostring(version.made)))
+  else
+    print("Build:     unknown (installed by hand?)")
+  end
+
   print(("Fuel:      %s"):format(tostring(turtle.getFuelLevel())))
   print(("Crafting:  %s"):format(
     turtle.craft and "crafting table fitted"
