@@ -98,7 +98,7 @@ py -3 tools/make_installer.py
 Then put it somewhere the server can reach over HTTP and, on each turtle:
 
 ```
-wget run https://raw.githubusercontent.com/Sylvezar/turtle-projects/main/quarry-wall/install.lua
+wget run https://raw.githubusercontent.com/<you>/<repo>/main/install.lua
 ```
 
 That downloads and runs it in one step; it writes `wall/` and prints what it
@@ -149,16 +149,52 @@ Needs a server restart to take effect.
 ```
 wall/wall check                    check config and turtle. Moves nothing.
 wall/wall scan                     trace the ring and measure. Places nothing.
-wall/wall build [n] [i] [courses]  build this turtle's share.
+wall/wall join                     wait for the monitor to assign a slice.
+wall/wall build [n] [i] [courses]  build a slice given directly.
 wall/wall resume                   carry on from an interrupted run.
 wall/wall seal [courses]           fill the gap under the wall base.
 ```
 
-Run `wall scan` on **one** turtle first. It traces the ring with the strict
-check (verifying it is one block wide the whole way round), measures the
-height, and prints the course count.
+First, on **one** turtle:
 
-Then on each turtle:
+```
+wall/wall scan
+```
+
+It traces the ring with the strict check (verifying it is one block wide the
+whole way round), measures the height, and prints the course count. Note that
+number — it is the only one you have to type.
+
+### With a monitor (recommended for more than two turtles)
+
+Start `wall/monitor` on the computer, then `wall/wall join` on each turtle in
+any order. They check into a lobby and wait:
+
+```
+wall monitor -- lobby
+--------------------------------------------------
+On each turtle run:  wall join
+
+  1   id 3    wall-1
+  2   id 5    wall-2
+  3   id 7    wall-3
+--------------------------------------------------
+3 enlisted -- press ENTER to assign and launch
+```
+
+Press Enter, give it the course count once, and it assigns the slices and
+releases the turtles one at a time.
+
+That does two useful things. **The indices are assigned in one place**, so
+there is no way to give two turtles the same one. And **only one turtle traces
+the ring at a time** — each is released when the previous reports it has
+started building, or after the stagger timeout, whichever comes first. Tracing
+is a full lap of the perimeter, and eight turtles doing it at once is a traffic
+jam round the station.
+
+### Without a monitor
+
+Give each turtle its numbers directly:
 
 ```
 > wall/wall build
@@ -176,58 +212,54 @@ Then on each turtle:
   Start? (y/N)
 ```
 
-Or pass them as arguments: `wall/wall build 8 3 118 -y`.
+Or as arguments: `wall/wall build 8 3 118 -y`.
 
-**Give every turtle the same course count.** It is the one number that must
-match — if they disagree, their bands misalign and you get a doubled course and
-a gap. The printed course range is your check: run through the turtles in order
-and the ranges should tile 1…118 with no repeats and no gaps.
+**Every turtle must get the same course count**, or their slices misalign and
+you get a doubled course and a gap. The printed range is your check — run
+through the turtles in order and the ranges should tile 1…118 with no repeats.
+**Stagger the starts** by a minute or so.
 
-**Stagger the starts.** Several turtles tracing the ring at once will collide
-near the station. Start them a minute apart.
+### Fuel to get started
 
-### Watching it from one place (optional)
+**Put a coal block straight into each turtle before you start.** The fuel chest
+sits one block above, reaching it costs a move, and a turtle with nothing in
+the tank cannot pay. It says so rather than stalling, but a coal block in the
+inventory avoids the problem entirely.
 
-Fit each turtle with a **wireless or ender modem** in its second upgrade slot
-and put one on an ordinary computer running `monitor`:
+### Watching it
+
+Once launched, the monitor switches to a status board:
 
 ```
-wall monitor    8 turtles    4 holes
+wall monitor -- 8 turtles    4 holes
 --------------------------------------------------
- #  band      doing              done  skip miss
- 1  1-14      done               2184     0    0
- 2  15-29     c18 67/156         1580     2    0
- 3  30-44     restock c31        1204     1    0
- 4  45-59     quiet               890     0    0
+ #  band      doing            done  skip miss
+ 1  1-14      done             2184     0    0
+ 2  15-29     c18 67/156       1580     2    0
+ 3  30-44     restock c31      1204     1    0
+ 4  45-59     quiet             890     0    0
 --------------------------------------------------
 coverage 1-118 complete
 ```
 
-Turtles broadcast one-way; nothing waits for a reply. Starting or stopping the
-monitor has no effect on a run, and a turtle with no modem behaves exactly as
-before — **the wall does not need a network**, because the marker ring already
-gives every turtle the same answer.
+Every turtle's holes collect into one `wall_holes.txt` on the computer, and the
+coverage line keeps checking the slices tile — which catches a turtle started
+by hand with `wall build` landing on top of an assigned one.
 
-Two things it earns its keep for:
+Turtles broadcast one-way and never wait for a reply, so stopping the monitor
+mid-run changes nothing. `wall build` needs no modem at all.
 
-- **Every turtle's holes land in one `wall_holes.txt`** on the computer,
-  stamped with which turtle found each one.
-- **The coverage line checks the bands tile.** Eight indices typed by hand is
-  the one place a typo does real damage — two turtles on index 3 means a
-  doubled band and a gap elsewhere, which you would otherwise not find until
-  you looked at the finished wall. It shows up in the first few seconds
-  instead.
+**Range:** plain wireless modems reach ~64 blocks and your turtles climb 118,
+so they read `quiet` up high and reappear when they come home to restock. The
+lobby and launch happen at the station, so plain modems are fine for that part.
+Ender modems give continuous status.
 
-The crafting table takes one upgrade slot and the modem the other, so there is
-still no room for a pickaxe — fitting a modem keeps the "cannot break anything"
-guarantee intact.
+### If a run is interrupted
 
-**Range:** plain wireless modems reach ~64 blocks, and your turtles climb 118,
-so they will drop out up high and reappear when they come home to restock
-(showing as `quiet` in between). Ender modems have unlimited range if you want
-continuous status.
-
-`monitor.lua` goes on the computer, not the turtles. It needs no other files.
+Chunk unloads, server restarts and running out of fuel all leave a
+`wall_state.txt`. Put the turtle back **at its station, facing the way it
+started**, and run `wall/wall resume`. It re-traces the ring, checks it still
+has the same number of cells, and picks up exactly where it stopped.
 
 ### Cables and anything else in the wall line
 

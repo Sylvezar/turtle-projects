@@ -1,26 +1,33 @@
 --[[--------------------------------------------------------------------------
-  monitor -- one screen showing every turtle on the job.
+  monitor -- assign the turtles their slices, launch them, and watch.
 
   Runs on an ordinary computer with a wireless modem, anywhere in range. It
-  listens for the broadcasts the turtles send and shows what each one is doing,
-  collecting all their holes into a single wall_holes.txt on this computer.
+  does three things in sequence:
 
-  It is a listener and nothing more. It never sends anything, the turtles never
-  wait for it, and starting or stopping it has no effect on a run in progress.
+    lobby      turtles running `wall join` check in and wait
+    launch     each is handed a slice and released, one at a time
+    watch      one screen showing what every turtle is doing
 
-  Its one active job is checking that the bands tile. Eight turtles each told
-  by hand which index they are is the one place a typo does real damage -- two
-  turtles on index 3 means a doubled band and a gap somewhere else, which you
-  would otherwise not discover until you looked at the finished wall. The
-  coverage line on the bottom catches it in the first few seconds.
+  Assigning here rather than typing an index into each turtle removes the one
+  place a typo does real damage -- two turtles given the same index means a
+  doubled band and a gap elsewhere, which you would not discover until you
+  looked at the finished wall.
+
+  Releasing one at a time matters too: tracing the marker ring takes a lap of
+  the perimeter, and eight turtles doing that simultaneously is a traffic jam
+  round the station. Each one is let go when the previous reports it has
+  started building, or after the stagger timeout, whichever comes first.
+
+  Turtles started with `wall build` instead of `wall join` never enter the
+  lobby; they just appear on the board once they start reporting.
 
   Usage:  monitor [protocol]
 ----------------------------------------------------------------------------]]
 
-local PROTOCOL  = ... or "wall"
-local HOLES     = "wall_holes.txt"
-local STALE     = 30        -- seconds of silence before a turtle is "quiet"
-local SIDES     = { "left", "right", "top", "bottom", "front", "back" }
+local PROTOCOL = ... or "wall"
+local HOLES    = "wall_holes.txt"
+local STALE    = 30        -- seconds of silence before a turtle reads "quiet"
+local SIDES    = { "left", "right", "top", "bottom", "front", "back" }
 
 --[[-- modem ---------------------------------------------------------------]]
 
@@ -43,12 +50,20 @@ end
 
 --[[-- state ---------------------------------------------------------------]]
 
-local seen      = {}        -- [index] = latest status
+local phase     = "lobby"     -- lobby -> launch -> watch
+local waiting   = {}          -- enlistment order: { id = , label = }
+local enlisted  = {}          -- id -> true, to dedupe re-announcements
+local seen      = {}          -- assigned index -> latest status
 local holes     = {}
 local holeSeen  = {}
+
+local courses, stagger        -- chosen at launch time
+local releasing, releaseTimer -- how far through the launch we are
 local totalCourses
 
 local function now() return os.clock() end
+
+--[[-- incoming ------------------------------------------------------------]]
 
 local function noteHole(msg)
   local key = ("%s/%s/%s"):format(tostring(msg.turtle), tostring(msg.course),
@@ -68,14 +83,23 @@ local function noteHole(msg)
 end
 
 local function handle(msg)
-  if type(msg) ~= "table" or not msg.turtle then return end
+  if type(msg) ~= "table" then return end
 
-  if msg.courses then totalCourses = msg.courses end
+  if msg.kind == "enlist" and msg.id then
+    if not enlisted[msg.id] then
+      enlisted[msg.id] = true
+      waiting[#waiting + 1] = { id = msg.id, label = msg.label }
+    end
+    return
+  end
 
   if msg.kind == "hole" then
     noteHole(msg)
     return
   end
+
+  if not msg.turtle then return end
+  if msg.courses then totalCourses = msg.courses end
 
   local t = seen[msg.turtle] or {}
   for k, v in pairs(msg) do t[k] = v end
@@ -87,10 +111,12 @@ end
   Do the bands tile?
 
   Every course from 1 to the total should be claimed by exactly one turtle.
-  Anything else is a hand-typed index gone wrong.
+  With the monitor assigning them that should be automatic, but a turtle
+  started by hand with `wall build` can still land on top of one.
 ----------------------------------------------------------------------------]]
 local function coverage()
-  if not totalCourses then return "waiting for turtles", false end
+  local total = totalCourses or courses
+  if not total then return "waiting for turtles", false end
 
   local claimed = {}
   for _, t in pairs(seen) do
@@ -100,15 +126,17 @@ local function coverage()
   end
 
   local gap, dup
-  for c = 1, totalCourses do
+  for c = 1, total do
     local n = claimed[c] or 0
     if n == 0 and not gap then gap = c end
     if n > 1 and not dup then dup = c end
   end
 
-  if dup then return ("OVERLAP at course %d -- two turtles share an index"):format(dup), true end
+  if dup then
+    return ("OVERLAP at course %d -- two turtles share a slice"):format(dup), true
+  end
   if gap then return ("unclaimed from course %d"):format(gap), false end
-  return ("coverage 1-%d complete"):format(totalCourses), false
+  return ("coverage 1-%d complete"):format(total), false
 end
 
 --[[-- drawing -------------------------------------------------------------]]
@@ -125,32 +153,72 @@ local function rpad(s, n)
   return string.rep(" ", n - #s) .. s
 end
 
---- Colour the text if this terminal can, and quietly carry on if it cannot --
---- a plain computer has no setTextColour at all.
 local function colour(name)
   if not term.setTextColour then return end
   if not colours or not colours[name] then return end
   pcall(term.setTextColour, colours[name])
 end
 
-local function draw()
-  local w, h = term.getSize()
+local function header(text)
+  local w = term.getSize()
   term.clear()
   term.setCursorPos(1, 1)
-
-  local n = 0
-  for _ in pairs(seen) do n = n + 1 end
-
-  print(("wall monitor    %d turtle%s    %d hole%s")
-        :format(n, n == 1 and "" or "s", #holes, #holes == 1 and "" or "s"))
+  print("wall monitor -- " .. text)
   print(string.rep("-", math.min(w, 50)))
+end
+
+local function drawLobby()
+  header("lobby")
+  print("On each turtle run:  wall join")
+  print("")
+
+  for i, t in ipairs(waiting) do
+    print((" %2d   id %-4s %s"):format(i, tostring(t.id), t.label or ""))
+  end
+
+  local _, h = term.getSize()
+  term.setCursorPos(1, h - 1)
+  print(string.rep("-", 50))
+  if #waiting == 0 then
+    write("no turtles yet")
+  else
+    write(("%d enlisted -- press ENTER to assign and launch"):format(#waiting))
+  end
+end
+
+local function drawLaunch()
+  header("launching")
+
+  for i, t in ipairs(waiting) do
+    local note
+    if i < releasing then
+      local st = seen[i]
+      note = (st and st.state) and ("released, " .. st.state) or "released"
+    elseif i == releasing then
+      note = "releasing now"
+    else
+      note = "waiting"
+    end
+    print((" %2d   id %-4s %s"):format(i, tostring(t.id), note))
+  end
+
+  local _, h = term.getSize()
+  term.setCursorPos(1, h - 1)
+  print(string.rep("-", 50))
+  write(("%d of %d released"):format(math.min(releasing - 1, #waiting), #waiting))
+end
+
+local function drawWatch()
+  header(("%d turtles    %d holes"):format(#waiting, #holes))
   print(" #  band      doing            done  skip miss")
 
   local indices = {}
   for i in pairs(seen) do indices[#indices + 1] = i end
   table.sort(indices)
 
+  local _, h = term.getSize()
   local row = 4
+
   for _, i in ipairs(indices) do
     if row >= h - 2 then break end
     local t = seen[i]
@@ -179,7 +247,7 @@ local function draw()
   end
 
   term.setCursorPos(1, h - 1)
-  print(string.rep("-", math.min(w, 50)))
+  print(string.rep("-", 50))
 
   local text, bad = coverage()
   if bad then colour("red") end
@@ -187,14 +255,94 @@ local function draw()
   colour("white")
 end
 
+local function draw()
+  if phase == "lobby"  then drawLobby()  return end
+  if phase == "launch" then drawLaunch() return end
+  drawWatch()
+end
+
+--[[-- launching -----------------------------------------------------------]]
+
+local function releaseNext()
+  if releasing > #waiting then
+    phase = "watch"
+    return
+  end
+
+  local t = waiting[releasing]
+  rednet.broadcast({ kind = "assign", to = t.id, index = releasing,
+                     turtles = #waiting, courses = courses }, PROTOCOL)
+
+  releaseTimer = os.startTimer(stagger)
+end
+
+--- Move on once the turtle we just released says it is building -- tracing the
+--- ring is the part that must not overlap, and that is over by then.
+local function maybeAdvance()
+  if phase ~= "launch" then return end
+  local st = seen[releasing]
+  if st and (st.state == "building" or st.state == "restocking") then
+    releasing = releasing + 1
+    releaseNext()
+  end
+end
+
+local function beginLaunch()
+  if #waiting == 0 then return end
+
+  term.clear()
+  term.setCursorPos(1, 1)
+  print(("%d turtles enlisted."):format(#waiting))
+  print("")
+  print("Run `wall scan` on one turtle first if you have not; it prints the")
+  print("course count.")
+  print("")
+
+  write("How many courses tall: ")
+  courses = tonumber(read())
+  while not courses or courses < 1 or courses ~= math.floor(courses) do
+    write("  enter a whole number of at least 1: ")
+    courses = tonumber(read())
+  end
+
+  write("Seconds between launches [45]: ")
+  stagger = tonumber(read()) or 45
+  if stagger < 5 then stagger = 5 end
+
+  phase = "launch"
+  releasing = 1
+  releaseNext()
+end
+
 --[[-- loop ----------------------------------------------------------------]]
 
 print("Listening on protocol '" .. PROTOCOL .. "' via the " .. side .. " modem.")
 print("Holes are appended to " .. HOLES .. ". Ctrl+T to stop.")
-sleep(1.5)
+sleep(1)
+
+local redraw = os.startTimer(1)
 
 while true do
-  local _, msg = rednet.receive(PROTOCOL, 1)
-  if msg then handle(msg) end
+  local event = { os.pullEvent() }
+  local name = event[1]
+
+  if name == "rednet_message" then
+    if event[4] == PROTOCOL then
+      handle(event[3])
+      maybeAdvance()
+    end
+
+  elseif name == "timer" then
+    if event[2] == redraw then
+      redraw = os.startTimer(1)
+    elseif event[2] == releaseTimer and phase == "launch" then
+      releasing = releasing + 1
+      releaseNext()
+    end
+
+  elseif name == "key" and phase == "lobby" then
+    if event[2] == keys.enter then beginLaunch() end
+  end
+
   draw()
 end

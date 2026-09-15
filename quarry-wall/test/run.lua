@@ -640,6 +640,78 @@ ok(kinds.status < placedBlocks / 4,
 mock.setModem(nil)
 report.close()
 
+
+--[[--------------------------------------------------------------------------
+  10c. Enlisting and being assigned a slot
+----------------------------------------------------------------------------]]
+
+section("enlist and assign")
+
+mock.setModem("right")
+report.close()
+report.open(cfg)
+mock.clearSent()
+mock.clearEvents()
+
+-- The monitor answers straight away.
+mock.pushEvent("rednet_message", 1,
+               { kind = "assign", to = 7, index = 3, turtles = 8,
+                 courses = 118 }, "wall")
+
+local assign, aerr = report.awaitAssignment()
+ok(assign ~= nil, "got an assignment: " .. tostring(aerr))
+
+if assign then
+  eq(assign.index, 3, "assignment carries the slot index")
+  eq(assign.turtles, 8, "assignment carries the turtle count")
+  eq(assign.courses, 118, "assignment carries the course count")
+end
+
+local enlists = 0
+for _, m in ipairs(mock.sent()) do
+  if m.msg.kind == "enlist" then
+    enlists = enlists + 1
+    eq(m.msg.id, 7, "the enlist names this computer's id")
+  end
+end
+ok(enlists >= 1, "it announced itself before waiting")
+
+-- An assignment meant for another turtle is ignored.
+mock.clearSent()
+mock.clearEvents()
+mock.pushEvent("rednet_message", 1,
+               { kind = "assign", to = 99, index = 1, turtles = 8,
+                 courses = 118 }, "wall")
+mock.pushEvent("rednet_message", 1,
+               { kind = "assign", to = 7, index = 5, turtles = 8,
+                 courses = 118 }, "wall")
+
+local mine = report.awaitAssignment()
+ok(mine ~= nil and mine.index == 5,
+   "an assignment addressed to another turtle is ignored")
+
+-- Re-announces on the timer rather than going quiet.
+mock.clearSent()
+mock.clearEvents()
+mock.pushEvent("timer", 1)
+mock.pushEvent("rednet_message", 1,
+               { kind = "assign", to = 7, index = 2, turtles = 8,
+                 courses = 118 }, "wall")
+
+local ticks = 0
+report.awaitAssignment(function() ticks = ticks + 1 end)
+eq(ticks, 1, "it re-announces while waiting")
+
+local reannounced = 0
+for _, m in ipairs(mock.sent()) do
+  if m.msg.kind == "enlist" then reannounced = reannounced + 1 end
+end
+ok(reannounced >= 2, "and shouts again rather than waiting silently")
+
+mock.setModem(nil)
+report.close()
+mock.clearEvents()
+
 --[[--------------------------------------------------------------------------
   11. Guards
 ----------------------------------------------------------------------------]]

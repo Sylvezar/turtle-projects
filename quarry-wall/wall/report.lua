@@ -102,4 +102,62 @@ function report.hole(msg)
   send(msg)
 end
 
+--[[--------------------------------------------------------------------------
+  Enlisting
+
+  The one place this stops being one-way. A turtle running `wall join` says it
+  is here and waits to be told which slice it owns, so the eight indices are
+  assigned in one place instead of typed in eight times -- and the monitor can
+  release them one at a time rather than having eight turtles trace the ring
+  simultaneously.
+
+  Everything else still works without it. `wall build` takes the numbers
+  directly and needs no modem at all.
+----------------------------------------------------------------------------]]
+
+function report.id()
+  if os and os.getComputerID then return os.getComputerID() end
+  return 0
+end
+
+function report.enlist()
+  send({ kind = "enlist", id = report.id(),
+         label = os.getComputerLabel and os.getComputerLabel() or nil })
+end
+
+--[[--------------------------------------------------------------------------
+  Wait until the monitor hands us a slot.
+
+  Re-announces every few seconds, so a turtle started before the monitor -- or
+  one whose first shout was missed -- still gets picked up. `onWait` is called
+  each time round so the caller can show something.
+
+  Returns the assignment table, or nil if the turtle was told to stand down.
+----------------------------------------------------------------------------]]
+function report.awaitAssignment(onWait)
+  if not open then return nil, "no modem fitted" end
+
+  local me = report.id()
+  report.enlist()
+
+  local timer = os.startTimer(3)
+
+  while true do
+    local event = { os.pullEvent() }
+
+    if event[1] == "timer" and event[2] == timer then
+      report.enlist()
+      if onWait then onWait() end
+      timer = os.startTimer(3)
+
+    elseif event[1] == "rednet_message" then
+      local msg = event[3]
+      if type(msg) == "table" and msg.to == me then
+        if msg.kind == "assign" then return msg end
+        if msg.kind == "standdown" then return nil, "told to stand down" end
+      end
+    end
+  end
+end
+
 return report

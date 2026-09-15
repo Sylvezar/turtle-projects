@@ -489,10 +489,40 @@ local rednetApi = {
 mock.peripheral = peripheralApi
 mock.rednet     = rednetApi
 
+--[[-- events ---------------------------------------------------------------
+
+  A scriptable event queue, so the enlist/assign handshake can be driven
+  without a running computer. Tests push the events they want the turtle to
+  see; pulling from an empty queue is an error rather than a hang, which turns
+  "waited forever" into a visible test failure.
+----------------------------------------------------------------------------]]
+
+local events  = {}
+local timerId = 0
+
+function mock.pushEvent(...) events[#events + 1] = { ... } end
+function mock.pendingEvents() return #events end
+
+--- Also resets the timer counter, so a test can push ("timer", 1) and have it
+--- match the first timer the code under test starts.
+function mock.clearEvents()
+  events = {}
+  timerId = 0
+end
+
 --- Install everything as globals.
 function mock.install()
   _G.peripheral = peripheralApi
   _G.rednet     = rednetApi
+  _G.keys       = { enter = 257 }
+
+  os.pullEvent = function()
+    if #events == 0 then error("mock: pullEvent with no events queued", 0) end
+    return table.unpack(table.remove(events, 1))
+  end
+  os.startTimer = function() timerId = timerId + 1 return timerId end
+  os.getComputerID = function() return 7 end
+  os.getComputerLabel = function() return "wall-test" end
   _G.colours    = { red = 0x4000, white = 0x1 }
   _G.term = {
     getSize      = function() return 51, 19 end,

@@ -221,24 +221,15 @@ local function gather(args)
   return turtles, index, courses
 end
 
-function cmd.build(args)
-  local yes = false
-  local rest = {}
-  for _, a in ipairs(args) do
-    if a == "-y" then yes = true else rest[#rest + 1] = a end
-  end
-
-  local ok, ferr = build.refuel(cfg)
-  if not ok then die(ferr) end
-
+--- Trace the ring, resolve the pattern, and lay this turtle's share. Shared
+--- by `build` (numbers typed in) and `join` (numbers handed over by radio).
+local function runBuild(turtles, index, courses, yes)
   print("Tracing the marker ring...")
   local cells, err = ring.survey(cfg, false)
   if not cells then die(err) end
 
   local d = ring.describe(cells)
   print(("  %d cells, anchored at %d,%d"):format(d.count, d.anchor.x, d.anchor.z))
-
-  local turtles, index, courses = gather(rest)
 
   local layers, perr = pattern.layers(cfg.pattern, courses)
   if not layers then die(perr) end
@@ -260,16 +251,13 @@ function cmd.build(args)
         :format(index, turtles, from, to, courses))
   reportBands(layers, from, to, d.count)
 
-  if not yes and not confirm("\nStart?") then
+  print("")
+  if not yes and not confirm("Start?") then
     print("Nothing placed.")
     return
   end
 
   build.clearHoles()
-
-  if report.open(cfg) then
-    print("Reporting to the monitor.")
-  end
   report.identify({ turtle = index, turtles = turtles,
                     from = from, to = to, courses = courses })
 
@@ -279,6 +267,57 @@ function cmd.build(args)
   if not done then die(result) end
 
   report(result)
+end
+
+function cmd.build(args)
+  local yes = false
+  local rest = {}
+  for _, a in ipairs(args) do
+    if a == "-y" then yes = true else rest[#rest + 1] = a end
+  end
+
+  local ok, ferr = build.refuel(cfg)
+  if not ok then die(ferr) end
+
+  if report.open(cfg) then print("Reporting to the monitor.") end
+
+  local turtles, index, courses = gather(rest)
+  runBuild(turtles, index, courses, yes)
+end
+
+--[[--------------------------------------------------------------------------
+  join -- wait for the monitor to hand out a slot.
+
+  Removes the eight hand-typed indices, which is the one place a typo does real
+  damage, and lets the monitor release turtles one at a time so they are not
+  all tracing the ring at once.
+
+  Needs a modem. `wall build` remains the way to run without one.
+----------------------------------------------------------------------------]]
+function cmd.join()
+  if not report.open(cfg) then
+    die("join needs a wireless modem fitted -- use `wall build` instead")
+  end
+
+  local ok, ferr = build.refuel(cfg)
+  if not ok then die(ferr) end
+
+  print(("Turtle #%d waiting for the monitor to assign a slot."):format(report.id()))
+  print("Ctrl+T to give up.")
+
+  local dots = 0
+  local assign, aerr = report.awaitAssignment(function()
+    dots = dots + 1
+    if dots % 5 == 0 then print("  still waiting...") end
+  end)
+
+  if not assign then die(aerr or "no assignment received") end
+
+  print("")
+  print(("Assigned slot %d of %d, %d courses.")
+        :format(assign.index, assign.turtles, assign.courses))
+
+  runBuild(assign.turtles, assign.index, assign.courses, true)
 end
 
 function cmd.resume()
@@ -356,6 +395,7 @@ end
 
 function cmd.help()
   print("wall check                    check config and turtle, move nothing")
+  print("wall join                     wait for the monitor to assign a slot")
   print("wall scan                     trace the ring and measure, place nothing")
   print("wall build [n] [i] [courses]  build this turtle's share")
   print("wall resume                   carry on from an interrupted run")
