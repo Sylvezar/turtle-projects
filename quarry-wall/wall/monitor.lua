@@ -292,7 +292,20 @@ local function beginLaunch()
 
   term.clear()
   term.setCursorPos(1, 1)
-  print(("%d turtles enlisted."):format(#waiting))
+  print(("%d turtles enlisted:"):format(#waiting))
+  for i, t in ipairs(waiting) do
+    print(("  %d   id %-4s %s"):format(i, tostring(t.id), t.label or ""))
+  end
+  print("")
+
+  -- The count is locked in here: the wall is split between exactly these
+  -- turtles, and anything that enlists later waits forever for an assignment
+  -- that never comes. Worth one keypress to be sure.
+  write(("Launch with these %d? Later arrivals miss out. (y/N) "):format(#waiting))
+  if read():lower():sub(1, 1) ~= "y" then
+    return          -- stays in the lobby, still collecting
+  end
+
   print("")
   print("Run `wall scan` on one turtle first if you have not; it prints the")
   print("course count.")
