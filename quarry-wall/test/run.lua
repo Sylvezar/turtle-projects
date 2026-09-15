@@ -119,6 +119,60 @@ local function toWorld(c, ox, oz, h)
 end
 
 --[[--------------------------------------------------------------------------
+  0. Lua 5.2 compatibility
+
+  CC:Tweaked runs Lua 5.2. This harness runs a much newer Lua, so anything
+  added in 5.3 or later compiles perfectly here and then fails on the turtle
+  with a syntax error -- which is exactly what // integer division did, after
+  560 green checks. A compile that passes here proves nothing about the
+  version actually in the game, so the newer syntax is banned outright.
+----------------------------------------------------------------------------]]
+
+section("Lua 5.2 compatibility")
+
+local SOURCES = { "config", "nav", "inv", "craft", "ring", "scan", "pattern",
+                  "build", "report", "wall", "monitor", "crafttest" }
+
+local FORBIDDEN = {
+  { "//",              "integer division -- use math.floor" },
+  { "<<",              "bit shift" },
+  { ">>",              "bit shift" },
+  { "math%.tointeger", "math.tointeger" },
+  { "math%.type",      "math.type" },
+  { "math%.ult",       "math.ult" },
+  { "table%.move",     "table.move" },
+}
+
+--- Crude but adequate: block comments, then line comments.
+local function stripComments(src)
+  src = src:gsub("%-%-%[%[.-%]%]", " ")
+  src = src:gsub("%-%-%[=%[.-%]=%]", " ")
+  src = src:gsub("%-%-[^" .. string.char(10) .. "]*", " ")
+  return src
+end
+
+for _, name in ipairs(SOURCES) do
+  local path = "wall/" .. name .. ".lua"
+  local fh = io.open(path, "r")
+  if not fh then
+    fail = fail + 1
+    print("  FAIL: cannot read " .. path)
+  else
+    local code = stripComments(fh:read("*a"))
+    fh:close()
+    for _, rule in ipairs(FORBIDDEN) do
+      local where = code:find(rule[1])
+      if where then
+        fail = fail + 1
+        print(("  FAIL: %s uses %s"):format(path, rule[2]))
+      else
+        pass = pass + 1
+      end
+    end
+  end
+end
+
+--[[--------------------------------------------------------------------------
   1. Recipes
 ----------------------------------------------------------------------------]]
 

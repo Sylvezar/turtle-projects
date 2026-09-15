@@ -157,7 +157,9 @@ function craft.planBatch(name, want)
       if i > 1 then
         local prev = chain[i - 1]
         if inputItems % prev.count ~= 0 then ok = false break end
-        need = inputItems // prev.count
+        -- math.floor, not the // operator: CC:Tweaked is Lua 5.2 and has no
+        -- integer division.
+        need = math.floor(inputItems / prev.count)
       else
         need = inputItems          -- raw cobbled deepslate
       end
