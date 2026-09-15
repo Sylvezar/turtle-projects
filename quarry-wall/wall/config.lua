@@ -123,12 +123,20 @@ config.station = {
   up and you will get a doubled course and a gap. Run `wall scan` once, note
   what it reports, and type that number into all of them.
 
-  confirm   levels of open air needed before the climb calls it the rim.
-            Raise it if the pit face has big side caves.
+  stopAt    what stops the climb.
+              "roof"  something overhead. For a pit dug underground. Caves in
+                      the pit face cannot fool it, so prefer this when it
+                      applies.
+              "rim"   the pit face running out beside you. For a pit open to
+                      the sky, where nothing overhead can stop the climb. A
+                      cave mouth in the face looks just like the top, which is
+                      what `confirm` is trying to cover for.
+  confirm   "rim" only: levels of open air needed before calling it.
   max       hard ceiling on the climb (safety stop).
 ----------------------------------------------------------------------------]]
 config.height = {
   suggest = 118,
+  stopAt  = "roof",
   confirm = 2,
   max     = 384,
 }

@@ -47,6 +47,7 @@ local function M(n) return "minecraft:" .. n end
 local W, D, H = 11, 9, 27          -- pit footprint and how far the face rises
 local SX, SZ  = 5, 4               -- station, well inside the ring
 local COURSES = 24                 -- what scan.height should work out
+local ROOF    = 27                 -- solid ceiling, so "roof" mode has a stop
 
 --- Lay out a pit with a marker ring and a station platform.
 --- Ring sits at y=0; turtles stand at y=1, one level above it.
@@ -71,6 +72,14 @@ local function buildQuarry(anchorX, anchorZ)
     end
   end
   mock.setBlock(anchorX, 0, anchorZ, "minecraft:sea_lantern")
+
+  -- A ceiling over the whole pit: this is a hole dug underground, not one
+  -- open to the sky, which is what "roof" mode measures against.
+  for x = -margin, W - 1 + margin do
+    for z = -margin, D - 1 + margin do
+      mock.setBlock(x, ROOF, z, "minecraft:deepslate")
+    end
+  end
 
   mock.setBlock(SX, 0, SZ, "minecraft:glowstone")   -- station platform
   return cells
@@ -376,10 +385,38 @@ buildQuarry(0, 0)
 station(SX, SZ, 0)
 
 local hcells = ring.survey(cfg, false)
+
+-- Roof mode: climb until the ceiling stops us. Turtle level is world y=1 and
+-- the ceiling is at ROOF, so the topmost occupiable level is ROOF-1.
+cfg.height.stopAt = "roof"
 local courses, herr = scan.height(cfg, hcells)
-ok(courses ~= nil, "measured a height: " .. tostring(herr))
-eq(courses, COURSES, "course count matches the pit")
+ok(courses ~= nil, "measured a height against the roof: " .. tostring(herr))
+eq(courses, ROOF - 1 - 1 - scan.baseY(cfg) + 1, "roof mode course count")
 eq(scan.baseY(cfg), cfg.wall.aboveRing - 1, "base sits just above the gap")
+
+-- A cave in the pit face must not shorten a roof-mode climb; only the ceiling
+-- stops it. Punch a hole in one corner column and re-measure.
+for y = 10, 14 do
+  mock.setBlock(W, y, 0, nil)
+  mock.setBlock(W - 1, y, -1, nil)
+end
+local caved = scan.height(cfg, hcells)
+eq(caved, courses, "a cave in the face does not fool roof mode")
+
+-- Rim mode still works where there is genuinely open sky.
+mock.reset()
+buildQuarry(0, 0)
+for x = -3, W + 2 do
+  for z = -3, D + 2 do mock.setBlock(x, ROOF, z, nil) end   -- take the roof off
+end
+station(SX, SZ, 0)
+local rimCells = ring.survey(cfg, false)
+cfg.height.stopAt = "rim"
+local rimCourses, rimErr = scan.height(cfg, rimCells)
+ok(rimCourses ~= nil, "rim mode measures an open pit: " .. tostring(rimErr))
+eq(rimCourses, COURSES, "rim mode course count matches the pit face")
+
+cfg.height.stopAt = "roof"
 
 --[[--------------------------------------------------------------------------
   8. Eight turtles building the whole wall
