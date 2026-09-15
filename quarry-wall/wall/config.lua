@@ -110,14 +110,18 @@ config.wall = {
   heading  only used by "front". 0 = the way the turtle faced at launch,
            1 = its right, 2 = behind it, 3 = its left.
 
-  Set `overflow` to nil to keep leftovers on board. With the courses split
-  between turtles each one only sees two or three block types, so leftovers
-  rarely need anywhere to go.
+  `overflow` is REQUIRED for any pattern that needs crafting. turtle.craft()
+  matches the recipe against the whole inventory, so the turtle has to be
+  completely empty to craft anything at all -- everything it is carrying goes
+  in here meanwhile. A chest under the turtle costs no movement to reach and
+  needs no automation: the stranded leftovers of a whole run come to a couple
+  of hundred blocks, and they are looked for and reused before anything new is
+  crafted.
 ----------------------------------------------------------------------------]]
 config.station = {
   supply   = { offset = {0, 0, 0}, side = "front", heading = 0 },
   fuel     = { offset = {0, 1, 0}, side = "front", heading = 0 },
-  overflow = nil,
+  overflow = { offset = {0, 0, 0}, side = "down" },
 }
 
 --[[--------------------------------------------------------------------------
@@ -162,7 +166,7 @@ config.height = {
   saveEvery        write the resume file every N placed blocks.
 ----------------------------------------------------------------------------]]
 config.build = {
-  maxCarryCrafted = 384,
+  maxCarryCrafted = 256,
   maxCarryRaw     = 1024,
   carryAcross     = true,
   skipOccupied    = true,

@@ -354,8 +354,32 @@ end
 function turtle.getFuelLevel() return T.fuel end
 function turtle.getFuelLimit() return 100000 end
 
+--[[--------------------------------------------------------------------------
+  turtle.craft()
+
+  Confirmed in game: the real turtle matches the recipe against the WHOLE
+  inventory, not just the top-left 3x3. A single item anywhere else -- a spare
+  coal block, leftover material in slot 16 -- and nothing matches.
+
+  The mock used to ignore the other seven slots, which is exactly why the
+  offline tests were happy with a crafting design that could not work. It now
+  refuses the same way the real thing does.
+----------------------------------------------------------------------------]]
+local GRID_SLOTS = {
+  [1] = true, [2] = true, [3] = true,
+  [5] = true, [6] = true, [7] = true,
+  [9] = true, [10] = true, [11] = true,
+}
+
 function turtle.craft(limit)
   limit = limit or 64
+
+  for slot = 1, 16 do
+    if not GRID_SLOTS[slot] and T.slots[slot] then
+      return false, "No matching recipes"
+    end
+  end
+
   local shape = readGrid()
   if not shape then return false, "No matching recipes" end
 
@@ -467,12 +491,45 @@ function mock.setModem(side) modemSide = side end
 function mock.sent() return sent end
 function mock.clearSent() sent = {} end
 
+--- Turn a peripheral side name into the side a chest spec uses.
+local function chestSideOf(s)
+  if s == "bottom" then return "down" end
+  if s == "top"    then return "up" end
+  return s
+end
+
 local peripheralApi = {
   getType = function(s)
     if s == modemSide then return "modem" end
+    if chestAt(chestSideOf(s)) then return "minecraft:chest" end
     return nil
   end,
-  isPresent = function(s) return s == modemSide end,
+
+  isPresent = function(s)
+    return s == modemSide or chestAt(chestSideOf(s)) ~= nil
+  end,
+
+  --- Just enough inventory peripheral to read a chest without touching it,
+  --- which is how the turtle checks whether what it needs is already made.
+  wrap = function(s)
+    if s == modemSide then return { open = function() end } end
+    local ch = chestAt(chestSideOf(s))
+    if not ch then return nil end
+    return {
+      size = function() return 27 end,
+      list = function()
+        local out = {}
+        if ch.infinite then
+          out[1] = { name = ch.infinite, count = 64 }
+        else
+          for i, st in ipairs(ch.stacks or {}) do
+            out[i] = { name = st.name, count = st.count }
+          end
+        end
+        return out
+      end,
+    }
+  end,
 }
 
 local rednetApi = {

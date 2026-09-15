@@ -100,6 +100,11 @@ local function station(x, z, h)
   mock.setChest({ side = "front", at = { x, 2, z }, heading = h,
                   stacks = { { name = M("coal_block"), count = 64 } } })
 
+  -- The floor under the turtle is a chest: crafting needs the turtle to be
+  -- completely empty, so everything it carries goes in here meanwhile.
+  mock.setBlock(x, 0, z, "minecraft:chest")
+  mock.setChest({ side = "down", at = { x, 1, z }, stacks = {} })
+
   mock.setTurtle(x, 1, z, h)
   nav.setPos({ x = 0, y = 0, z = 0, h = 0 })
 end

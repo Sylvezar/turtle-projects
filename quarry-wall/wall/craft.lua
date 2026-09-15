@@ -1,10 +1,20 @@
 --[[--------------------------------------------------------------------------
   craft.lua -- turning cobbled deepslate into everything else.
 
-  Every recipe below reduces to cobbled deepslate, so the one chest is the
-  only input the station needs. Recipes are shaped, and Minecraft matches a
-  shape anywhere in the grid, so anchoring each one to the top-left of the 3x3
-  is safe.
+  Every recipe below reduces to cobbled deepslate, so the one chest is the only
+  input the station needs.
+
+  THE CONSTRAINT THAT SHAPES ALL OF THIS: turtle.craft() matches the recipe
+  against the WHOLE inventory, not just the top-left 3x3. One stray item in any
+  other slot -- a spare coal block, leftover material, the output of the last
+  batch -- and nothing matches. So at the moment of the craft the turtle must
+  hold the recipe and absolutely nothing else.
+
+  That rules out keeping a working stock on board while crafting, and it is why
+  batches are planned rather than improvised: a batch is sized so that every
+  stage of the chain divides exactly, leaving no remainder anywhere to spoil
+  the next craft. What cannot fit in one batch is parked in the overflow chest
+  by the caller and collected at the end.
 
   Grids are written as rows of characters, "A" being the single ingredient and
   " " an empty cell.
@@ -33,14 +43,14 @@ local recipes = {}
 
 local function add(r) recipes[r.result] = r end
 
--- The polish chain. Each step is 4-in/4-out, so a deepslate tile costs
--- exactly one cobbled deepslate, same as a polished block does.
+-- The polish chain. Each step is 4-in/4-out, so a deepslate tile costs exactly
+-- one cobbled deepslate, same as a polished block does.
 add(R("polished_deepslate", 4, "cobbled_deepslate",  SQUARE))
 add(R("deepslate_bricks",   4, "polished_deepslate", SQUARE))
 add(R("deepslate_tiles",    4, "deepslate_bricks",   SQUARE))
 
--- Chiseled is the odd one: it comes from two slabs, and one cobbled
--- deepslate makes two slabs, so it also lands at 1:1.
+-- Chiseled is the odd one: it comes from two slabs, and one cobbled deepslate
+-- makes two slabs, so it also lands at 1:1.
 add(R("cobbled_deepslate_slab", 6, "cobbled_deepslate", ROW))
 add(R("chiseled_deepslate",     1, "cobbled_deepslate_slab", SLAB2))
 
@@ -68,9 +78,9 @@ local function cells(r)
   for row = 1, #r.grid do
     local line = r.grid[row]
     for col = 1, #line do
-      local ch = line:sub(col, col)
-      if ch ~= " " then
-        out[#out + 1] = { slot = inv.gridSlot(row, col), item = r.key[ch] }
+      if line:sub(col, col) ~= " " then
+        out[#out + 1] = { slot = inv.gridSlot(row, col),
+                          item = r.key[line:sub(col, col)] }
       end
     end
   end
@@ -79,14 +89,10 @@ end
 
 craft.cells = cells
 
---- How many crafts we can safely run in one go: capped so a single batch's
---- output still fits in one stack, and so no grid slot needs more than 64.
-local function maxSteps(r)
-  return math.min(16, math.floor(64 / r.count))
-end
+local function cellCount(r) return #cells(r) end
 
---- Cobbled deepslate consumed per unit of `name`. Slabs come out at 0.5,
---- stairs at 1.5, everything else at 1.0.
+--- Cobbled deepslate consumed per unit. Slabs come out at 0.5, stairs at 1.5,
+--- everything else at 1.0.
 function craft.rawCost(name)
   if name == craft.RAW then return 1 end
   local r = recipes[name]
@@ -100,86 +106,91 @@ function craft.rawCost(name)
   return total / r.count
 end
 
---- Is `name` reachable from cobbled deepslate at all? Used by `wall plan` so
---- a typo in the pattern is caught before the turtle leaves the station.
 function craft.isReachable(name)
   return name == craft.RAW or craft.rawCost(name) ~= nil
 end
 
---- The chain of intermediates needed for `name`, root first.
-function craft.chain(name)
+--- The recipes needed to get from cobbled deepslate to `name`, in order.
+function craft.chainOf(name)
   local out, cur = {}, name
   while cur and cur ~= craft.RAW do
-    table.insert(out, 1, cur)
     local r = recipes[cur]
-    if not r then break end
+    if not r then return nil end
+    table.insert(out, 1, r)
     cur = cells(r)[1].item
   end
   return out
 end
 
---- Run one batch of `steps` crafts. The grid is cleared before staging and
---- again afterwards, because turtle.craft() leaves its output sitting in the
---- grid slots where the next stage would trip over it.
-local function runBatch(r, steps)
-  local ok, err = inv.clearGrid()
-  if not ok then return false, err end
+--[[--------------------------------------------------------------------------
+  planBatch -- the largest batch of `name` that divides exactly.
 
-  for _, c in ipairs(cells(r)) do
-    if not inv.stage(c.slot, c.item, steps) then
-      inv.clearGrid()
-      return false, ("could not stage %d x %s"):format(steps, c.item)
+  Works backwards from the finished block. For a chosen number of crafting
+  steps at the final stage, each earlier stage must produce exactly what the
+  next one consumes -- no remainder, because a remainder is a stray item and a
+  stray item means no recipe matches.
+
+  Also bounded by what a crafting grid can physically hold: at most 64 items in
+  any one cell, and at most 64 steps in one turtle.craft() call.
+
+  Returns { steps = {per stage}, raw = cobbled needed, out = blocks produced }.
+  `out` may exceed `want` slightly when `want` is not a whole number of crafts;
+  three spare deepslate tiles is the usual worst case.
+----------------------------------------------------------------------------]]
+function craft.planBatch(name, want)
+  local chain = craft.chainOf(name)
+  if not chain then return nil, "no recipe for " .. name end
+  if want < 1 then return nil, "nothing wanted" end
+
+  local last = chain[#chain]
+  local top  = math.min(64, math.max(1, math.ceil(want / last.count)))
+
+  for s = top, 1, -1 do
+    local steps, need, ok = {}, s, true
+
+    for i = #chain, 1, -1 do
+      local r = chain[i]
+      if need < 1 or need > 64 then ok = false break end
+      steps[i] = need
+
+      local inputItems = need * cellCount(r)
+      if i > 1 then
+        local prev = chain[i - 1]
+        if inputItems % prev.count ~= 0 then ok = false break end
+        need = inputItems // prev.count
+      else
+        need = inputItems          -- raw cobbled deepslate
+      end
+    end
+
+    if ok then
+      return { steps = steps, chain = chain, raw = need, out = s * last.count }
     end
   end
 
-  local out = inv.firstEmpty(inv.STORAGE)
-  if out then turtle.select(out) end
-
-  local crafted, why = turtle.craft(steps)
-  inv.clearGrid()
-
-  if not crafted then return false, why or "turtle.craft() refused the recipe" end
-  return true
+  return nil, ("cannot find a clean batch for %s"):format(name)
 end
 
 --[[--------------------------------------------------------------------------
-  ensure -- get at least `count` of `name` into the inventory, crafting
-  intermediates as needed.
+  runBatch -- convert a turtle holding exactly `plan.raw` cobbled deepslate,
+  and nothing else, into `plan.out` finished blocks.
 
-  Cobbled deepslate is the floor of the recursion: we never craft it, so if
-  there isn't enough the caller has to go and pull more from the chest.
+  Each stage consumes everything the last one made, so the inventory never has
+  anything in it but the current stage's material.
 ----------------------------------------------------------------------------]]
-function craft.ensure(name, count)
-  if inv.count(name) >= count then return true end
+function craft.runBatch(plan)
+  for i, r in ipairs(plan.chain) do
+    local steps = plan.steps[i]
 
-  if name == craft.RAW then
-    return false, ("need %d cobbled deepslate, have %d")
-                  :format(count, inv.count(craft.RAW))
-  end
-
-  local r = recipes[name]
-  if not r then return false, "no recipe for " .. name end
-
-  local guard = 0
-  while inv.count(name) < count do
-    guard = guard + 1
-    if guard > 256 then
-      return false, "crafting " .. name .. " stopped making progress"
+    local ok, err = inv.stageOnly(cells(r), steps)
+    if not ok then
+      return false, ("staging %s: %s"):format(r.result, tostring(err))
     end
 
-    local short = count - inv.count(name)
-    local steps = math.min(maxSteps(r), math.ceil(short / r.count))
-
-    -- Pull the ingredients up from further down the chain first.
-    local need = {}
-    for _, c in ipairs(cells(r)) do need[c.item] = (need[c.item] or 0) + steps end
-    for item, n in pairs(need) do
-      local ok, err = craft.ensure(item, n)
-      if not ok then return false, err end
+    local crafted, why = turtle.craft(steps)
+    if not crafted then
+      return false, ("%s: %s"):format(r.result, tostring(why or "craft refused"))
     end
-
-    local ok, err = runBatch(r, steps)
-    if not ok then return false, err end
   end
 
   return true

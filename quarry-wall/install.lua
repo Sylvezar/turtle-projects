@@ -339,24 +339,121 @@ end
   Restocking
 ----------------------------------------------------------------------------]]
 
-local function pullRaw(cfg, target, keepGridClear)
+--- Which peripheral side a station entry sits on, for reading a chest.
+local function peripheralSide(side)
+  if side == "up"   then return "top" end
+  if side == "down" then return "bottom" end
+  return "front"
+end
+
+--[[--------------------------------------------------------------------------
+  The overflow chest
+
+  turtle.craft() matches against the whole inventory, so the turtle has to be
+  completely empty to craft anything. Everything it is carrying goes here in
+  the meantime, along with the odd few blocks stranded when the pattern changes
+  from one type to the next.
+
+  Which means the chest gradually fills with blocks that are already made. They
+  get looked for before crafting anything, so the pattern coming back round to
+  a type it has built before costs nothing.
+----------------------------------------------------------------------------]]
+
+--- Put everything on board into the overflow chest, optionally keeping up to
+--- `keepMax` of `keepName`.
+function build.park(cfg, keepName, keepMax)
+  local spec = cfg.station.overflow
+  if not spec then
+    for _, s in ipairs(inv.ALL) do
+      if turtle.getItemCount(s) > 0 then return false end
+    end
+    return true
+  end
+
+  if not nav.reach(spec) then return false end
+
+  local kept = 0
+  for _, s in ipairs(inv.ALL) do
+    local held = turtle.getItemCount(s)
+    if held > 0 then
+      local drop = held
+      if keepName and inv.nameAt(s) == keepName then
+        local keep = math.min(held, math.max(0, (keepMax or math.huge) - kept))
+        kept = kept + keep
+        drop = held - keep
+      end
+      if drop > 0 then
+        turtle.select(s)
+        if not nav.dropAt(spec, drop) then return false end
+      end
+    end
+  end
+
+  return true
+end
+
+--- How many of `name` are already sitting in the overflow chest. Reading the
+--- chest costs nothing, so this is always worth doing before crafting.
+function build.readyInOverflow(cfg, name)
+  local spec = cfg.station.overflow
+  if not spec or not peripheral then return 0 end
+  if not nav.reach(spec) then return 0 end
+
+  local ok, chest = pcall(peripheral.wrap, peripheralSide(spec.side or "front"))
+  if not ok or type(chest) ~= "table" or not chest.list then return 0 end
+
+  local listed, items = pcall(chest.list)
+  if not listed or type(items) ~= "table" then return 0 end
+
+  local n = 0
+  for _, item in pairs(items) do
+    if item and item.name == name then n = n + (item.count or 0) end
+  end
+  return n
+end
+
+--- Take up to `want` of `name` back out of the overflow, returning anything
+--- else that comes up with it.
+function build.collect(cfg, name, want)
+  local spec = cfg.station.overflow
+  if not spec then return inv.count(name) end
+  if not nav.reach(spec) then return inv.count(name) end
+
+  for _ = 1, 64 do
+    if inv.count(name) >= want then break end
+    local slot = inv.firstEmpty(inv.ALL)
+    if not slot then break end
+    turtle.select(slot)
+    if not nav.suckAt(spec, 64) then break end
+  end
+
+  build.park(cfg, name, want)
+  return inv.count(name)
+end
+
+--[[--------------------------------------------------------------------------
+  Taking cobbled deepslate from the supply chest.
+
+  Exactly `target` and not one more: a single spare block is enough to make
+  every craft that follows fail.
+----------------------------------------------------------------------------]]
+local function pullRaw(cfg, target)
   local spec = cfg.station.supply
   local stalls = 0
 
   while inv.count(craft.RAW) < target do
-    local slot = inv.firstEmpty(keepGridClear and inv.STORAGE or inv.ALL)
-    if not slot then break end        -- full up; go build with what we have
+    local slot = inv.firstEmpty(inv.ALL)
+    if not slot then return false, "no free slot for cobbled deepslate" end
 
     turtle.select(slot)
-    local before = inv.count(craft.RAW)
-    local got    = nav.suckAt(spec, 64)
-    if keepGridClear then inv.clearGrid() end
+    local take = math.min(64, target - inv.count(craft.RAW))
 
-    if got then
+    if nav.suckAt(spec, take) then
       stalls = 0
-      if inv.count(craft.RAW) == before then
-        return false, "the supply chest holds something that is not cobbled "
-                   .. "deepslate -- it must contain only cobbled deepslate"
+      local got = inv.nameAt(slot)
+      if got and got ~= craft.RAW then
+        return false, ("the supply chest holds %s -- it must contain only "
+                    .. "cobbled deepslate"):format(got)
       end
     else
       stalls = stalls + 1
@@ -371,52 +468,54 @@ local function pullRaw(cfg, target, keepGridClear)
   return true
 end
 
-local function dumpUnneeded(cfg, stillNeeded)
-  local spec = cfg.station.overflow
-  if not spec then return end
+--[[--------------------------------------------------------------------------
+  restock -- come home and load up with `block`.
 
-  for _, s in ipairs(inv.ALL) do
-    local name = inv.nameAt(s)
-    if name and name ~= craft.RAW and not stillNeeded[name] then
-      turtle.select(s)
-      nav.dropAt(spec, turtle.getItemCount(s))
-    end
-  end
-end
-
+  For plain cobbled deepslate there is nothing to craft, so it just fills up.
+  Anything else has to be made, and making it means emptying the turtle first.
+----------------------------------------------------------------------------]]
 function build.restock(cfg, block, want, stillNeeded)
   if not nav.goHome() then return 0, "could not get back to the station" end
 
   local ok, err = build.refuel(cfg)
   if not ok then return 0, err end
 
-  dumpUnneeded(cfg, stillNeeded)
-  inv.compact()
-
-  local short = want - inv.count(block)
-  if short <= 0 then return inv.count(block) end
-
-  local crafted = block ~= craft.RAW
-
-  -- A little slack: every stage of a chain rounds up to its recipe output
-  -- size, so asking for exactly enough occasionally lands one short.
-  local rawTarget
-  if crafted then
-    rawTarget = math.ceil(craft.rawCost(block) * short) + 8
-  else
-    rawTarget = want
+  if block == craft.RAW then
+    if not build.park(cfg, block, want) then
+      return 0, "could not clear the inventory"
+    end
+    local pulled, perr = pullRaw(cfg, want)
+    if not pulled then return inv.count(block), perr end
+    return inv.count(block)
   end
 
-  local pulled, perr = pullRaw(cfg, rawTarget, crafted)
-  if not pulled then return inv.count(block), perr end
-
-  if crafted then
-    local made, cerr = craft.ensure(block, want)
-    if not made then return inv.count(block), cerr end
+  if not cfg.station.overflow then
+    return 0, "this pattern needs crafting, and crafting needs the turtle to "
+           .. "be empty -- set station.overflow in config.lua so it has "
+           .. "somewhere to put things"
   end
 
-  inv.compact()
-  return inv.count(block)
+  -- Everything off the turtle: it has to be bare to craft at all.
+  if not build.park(cfg) then return 0, "could not clear the inventory" end
+
+  -- Some of what we want may already be made and waiting.
+  local shortfall = want - build.readyInOverflow(cfg, block)
+
+  while shortfall > 0 do
+    local plan, perr = craft.planBatch(block, shortfall)
+    if not plan then return 0, perr end
+
+    local pulled, rerr = pullRaw(cfg, plan.raw)
+    if not pulled then return 0, rerr end
+
+    local made, cerr = craft.runBatch(plan)
+    if not made then return 0, cerr end
+
+    if not build.park(cfg) then return 0, "could not park the finished batch" end
+    shortfall = shortfall - plan.out
+  end
+
+  return build.collect(cfg, block, want)
 end
 
 --[[--------------------------------------------------------------------------
@@ -810,14 +909,18 @@ config.wall = {
   heading  only used by "front". 0 = the way the turtle faced at launch,
            1 = its right, 2 = behind it, 3 = its left.
 
-  Set `overflow` to nil to keep leftovers on board. With the courses split
-  between turtles each one only sees two or three block types, so leftovers
-  rarely need anywhere to go.
+  `overflow` is REQUIRED for any pattern that needs crafting. turtle.craft()
+  matches the recipe against the whole inventory, so the turtle has to be
+  completely empty to craft anything at all -- everything it is carrying goes
+  in here meanwhile. A chest under the turtle costs no movement to reach and
+  needs no automation: the stranded leftovers of a whole run come to a couple
+  of hundred blocks, and they are looked for and reused before anything new is
+  crafted.
 ----------------------------------------------------------------------------]]
 config.station = {
   supply   = { offset = {0, 0, 0}, side = "front", heading = 0 },
   fuel     = { offset = {0, 1, 0}, side = "front", heading = 0 },
-  overflow = nil,
+  overflow = { offset = {0, 0, 0}, side = "down" },
 }
 
 --[[--------------------------------------------------------------------------
@@ -862,7 +965,7 @@ config.height = {
   saveEvery        write the resume file every N placed blocks.
 ----------------------------------------------------------------------------]]
 config.build = {
-  maxCarryCrafted = 384,
+  maxCarryCrafted = 256,
   maxCarryRaw     = 1024,
   carryAcross     = true,
   skipOccupied    = true,
@@ -916,10 +1019,20 @@ files["wall/craft.lua"] = [=[
 --[[--------------------------------------------------------------------------
   craft.lua -- turning cobbled deepslate into everything else.
 
-  Every recipe below reduces to cobbled deepslate, so the one chest is the
-  only input the station needs. Recipes are shaped, and Minecraft matches a
-  shape anywhere in the grid, so anchoring each one to the top-left of the 3x3
-  is safe.
+  Every recipe below reduces to cobbled deepslate, so the one chest is the only
+  input the station needs.
+
+  THE CONSTRAINT THAT SHAPES ALL OF THIS: turtle.craft() matches the recipe
+  against the WHOLE inventory, not just the top-left 3x3. One stray item in any
+  other slot -- a spare coal block, leftover material, the output of the last
+  batch -- and nothing matches. So at the moment of the craft the turtle must
+  hold the recipe and absolutely nothing else.
+
+  That rules out keeping a working stock on board while crafting, and it is why
+  batches are planned rather than improvised: a batch is sized so that every
+  stage of the chain divides exactly, leaving no remainder anywhere to spoil
+  the next craft. What cannot fit in one batch is parked in the overflow chest
+  by the caller and collected at the end.
 
   Grids are written as rows of characters, "A" being the single ingredient and
   " " an empty cell.
@@ -948,14 +1061,14 @@ local recipes = {}
 
 local function add(r) recipes[r.result] = r end
 
--- The polish chain. Each step is 4-in/4-out, so a deepslate tile costs
--- exactly one cobbled deepslate, same as a polished block does.
+-- The polish chain. Each step is 4-in/4-out, so a deepslate tile costs exactly
+-- one cobbled deepslate, same as a polished block does.
 add(R("polished_deepslate", 4, "cobbled_deepslate",  SQUARE))
 add(R("deepslate_bricks",   4, "polished_deepslate", SQUARE))
 add(R("deepslate_tiles",    4, "deepslate_bricks",   SQUARE))
 
--- Chiseled is the odd one: it comes from two slabs, and one cobbled
--- deepslate makes two slabs, so it also lands at 1:1.
+-- Chiseled is the odd one: it comes from two slabs, and one cobbled deepslate
+-- makes two slabs, so it also lands at 1:1.
 add(R("cobbled_deepslate_slab", 6, "cobbled_deepslate", ROW))
 add(R("chiseled_deepslate",     1, "cobbled_deepslate_slab", SLAB2))
 
@@ -983,9 +1096,9 @@ local function cells(r)
   for row = 1, #r.grid do
     local line = r.grid[row]
     for col = 1, #line do
-      local ch = line:sub(col, col)
-      if ch ~= " " then
-        out[#out + 1] = { slot = inv.gridSlot(row, col), item = r.key[ch] }
+      if line:sub(col, col) ~= " " then
+        out[#out + 1] = { slot = inv.gridSlot(row, col),
+                          item = r.key[line:sub(col, col)] }
       end
     end
   end
@@ -994,14 +1107,10 @@ end
 
 craft.cells = cells
 
---- How many crafts we can safely run in one go: capped so a single batch's
---- output still fits in one stack, and so no grid slot needs more than 64.
-local function maxSteps(r)
-  return math.min(16, math.floor(64 / r.count))
-end
+local function cellCount(r) return #cells(r) end
 
---- Cobbled deepslate consumed per unit of `name`. Slabs come out at 0.5,
---- stairs at 1.5, everything else at 1.0.
+--- Cobbled deepslate consumed per unit. Slabs come out at 0.5, stairs at 1.5,
+--- everything else at 1.0.
 function craft.rawCost(name)
   if name == craft.RAW then return 1 end
   local r = recipes[name]
@@ -1015,86 +1124,91 @@ function craft.rawCost(name)
   return total / r.count
 end
 
---- Is `name` reachable from cobbled deepslate at all? Used by `wall plan` so
---- a typo in the pattern is caught before the turtle leaves the station.
 function craft.isReachable(name)
   return name == craft.RAW or craft.rawCost(name) ~= nil
 end
 
---- The chain of intermediates needed for `name`, root first.
-function craft.chain(name)
+--- The recipes needed to get from cobbled deepslate to `name`, in order.
+function craft.chainOf(name)
   local out, cur = {}, name
   while cur and cur ~= craft.RAW do
-    table.insert(out, 1, cur)
     local r = recipes[cur]
-    if not r then break end
+    if not r then return nil end
+    table.insert(out, 1, r)
     cur = cells(r)[1].item
   end
   return out
 end
 
---- Run one batch of `steps` crafts. The grid is cleared before staging and
---- again afterwards, because turtle.craft() leaves its output sitting in the
---- grid slots where the next stage would trip over it.
-local function runBatch(r, steps)
-  local ok, err = inv.clearGrid()
-  if not ok then return false, err end
+--[[--------------------------------------------------------------------------
+  planBatch -- the largest batch of `name` that divides exactly.
 
-  for _, c in ipairs(cells(r)) do
-    if not inv.stage(c.slot, c.item, steps) then
-      inv.clearGrid()
-      return false, ("could not stage %d x %s"):format(steps, c.item)
+  Works backwards from the finished block. For a chosen number of crafting
+  steps at the final stage, each earlier stage must produce exactly what the
+  next one consumes -- no remainder, because a remainder is a stray item and a
+  stray item means no recipe matches.
+
+  Also bounded by what a crafting grid can physically hold: at most 64 items in
+  any one cell, and at most 64 steps in one turtle.craft() call.
+
+  Returns { steps = {per stage}, raw = cobbled needed, out = blocks produced }.
+  `out` may exceed `want` slightly when `want` is not a whole number of crafts;
+  three spare deepslate tiles is the usual worst case.
+----------------------------------------------------------------------------]]
+function craft.planBatch(name, want)
+  local chain = craft.chainOf(name)
+  if not chain then return nil, "no recipe for " .. name end
+  if want < 1 then return nil, "nothing wanted" end
+
+  local last = chain[#chain]
+  local top  = math.min(64, math.max(1, math.ceil(want / last.count)))
+
+  for s = top, 1, -1 do
+    local steps, need, ok = {}, s, true
+
+    for i = #chain, 1, -1 do
+      local r = chain[i]
+      if need < 1 or need > 64 then ok = false break end
+      steps[i] = need
+
+      local inputItems = need * cellCount(r)
+      if i > 1 then
+        local prev = chain[i - 1]
+        if inputItems % prev.count ~= 0 then ok = false break end
+        need = inputItems // prev.count
+      else
+        need = inputItems          -- raw cobbled deepslate
+      end
+    end
+
+    if ok then
+      return { steps = steps, chain = chain, raw = need, out = s * last.count }
     end
   end
 
-  local out = inv.firstEmpty(inv.STORAGE)
-  if out then turtle.select(out) end
-
-  local crafted, why = turtle.craft(steps)
-  inv.clearGrid()
-
-  if not crafted then return false, why or "turtle.craft() refused the recipe" end
-  return true
+  return nil, ("cannot find a clean batch for %s"):format(name)
 end
 
 --[[--------------------------------------------------------------------------
-  ensure -- get at least `count` of `name` into the inventory, crafting
-  intermediates as needed.
+  runBatch -- convert a turtle holding exactly `plan.raw` cobbled deepslate,
+  and nothing else, into `plan.out` finished blocks.
 
-  Cobbled deepslate is the floor of the recursion: we never craft it, so if
-  there isn't enough the caller has to go and pull more from the chest.
+  Each stage consumes everything the last one made, so the inventory never has
+  anything in it but the current stage's material.
 ----------------------------------------------------------------------------]]
-function craft.ensure(name, count)
-  if inv.count(name) >= count then return true end
+function craft.runBatch(plan)
+  for i, r in ipairs(plan.chain) do
+    local steps = plan.steps[i]
 
-  if name == craft.RAW then
-    return false, ("need %d cobbled deepslate, have %d")
-                  :format(count, inv.count(craft.RAW))
-  end
-
-  local r = recipes[name]
-  if not r then return false, "no recipe for " .. name end
-
-  local guard = 0
-  while inv.count(name) < count do
-    guard = guard + 1
-    if guard > 256 then
-      return false, "crafting " .. name .. " stopped making progress"
+    local ok, err = inv.stageOnly(cells(r), steps)
+    if not ok then
+      return false, ("staging %s: %s"):format(r.result, tostring(err))
     end
 
-    local short = count - inv.count(name)
-    local steps = math.min(maxSteps(r), math.ceil(short / r.count))
-
-    -- Pull the ingredients up from further down the chain first.
-    local need = {}
-    for _, c in ipairs(cells(r)) do need[c.item] = (need[c.item] or 0) + steps end
-    for item, n in pairs(need) do
-      local ok, err = craft.ensure(item, n)
-      if not ok then return false, err end
+    local crafted, why = turtle.craft(steps)
+    if not crafted then
+      return false, ("%s: %s"):format(r.result, tostring(why or "craft refused"))
     end
-
-    local ok, err = runBatch(r, steps)
-    if not ok then return false, err end
   end
 
   return true
@@ -1471,6 +1585,72 @@ function inv.stage(dst, name, count)
   end
 
   return have >= count
+end
+
+local IS_GRID = {}
+for _, s in ipairs(inv.GRID) do IS_GRID[s] = true end
+
+--[[--------------------------------------------------------------------------
+  stageOnly -- lay out exactly the recipe, and prove nothing else is on board.
+
+  turtle.craft() matches against the whole inventory, so "the grid is right" is
+  not enough -- every other slot has to be empty too. This puts `steps` of each
+  ingredient in its cell and then checks the rest of the turtle is bare,
+  failing loudly rather than handing turtle.craft() something it will reject
+  with an unhelpful "No matching recipes".
+----------------------------------------------------------------------------]]
+function inv.stageOnly(cellList, steps)
+  local isCell = {}
+  for _, c in ipairs(cellList) do isCell[c.slot] = true end
+
+  --- Somewhere to put things that is not part of the crafting grid at all.
+  local function spillTo(name)
+    for _, s in ipairs(inv.ALL) do
+      if not IS_GRID[s] then
+        if turtle.getItemCount(s) == 0 then return s end
+        if inv.nameAt(s) == name and turtle.getItemSpace(s) > 0 then return s end
+      end
+    end
+    return nil
+  end
+
+  -- Start from an empty grid, so a cell holding the wrong thing -- or too much
+  -- of the right thing -- cannot survive into the craft.
+  for _, s in ipairs(inv.GRID) do
+    while turtle.getItemCount(s) > 0 do
+      local dest = spillTo(inv.nameAt(s))
+      if not dest then return false, "no room to clear the crafting grid" end
+      turtle.select(s)
+      if not turtle.transferTo(dest) then
+        return false, "could not clear the crafting grid"
+      end
+    end
+  end
+
+  for _, c in ipairs(cellList) do
+    local have = 0
+    for _, s in ipairs(inv.ALL) do
+      if have >= steps then break end
+      if not isCell[s] and inv.nameAt(s) == c.item then
+        turtle.select(s)
+        turtle.transferTo(c.slot, steps - have)
+        have = turtle.getItemCount(c.slot)
+      end
+    end
+    if have ~= steps then
+      return false, ("wanted %d of %s in slot %d, got %d")
+                    :format(steps, c.item, c.slot, have)
+    end
+  end
+
+  for _, s in ipairs(inv.ALL) do
+    if not isCell[s] and turtle.getItemCount(s) > 0 then
+      return false, ("slot %d still holds %s -- craft would be refused")
+                    :format(s, tostring(inv.nameAt(s)))
+    end
+  end
+
+  return true
 end
 
 --- Consolidate part-stacks of the same item so free slots come back.
@@ -2872,7 +3052,7 @@ order[#order + 1] = "wall/version.lua"
 files["wall/version.lua"] = [=[
 -- Generated by tools/make_installer.py. Not part of the source tree;
 -- it exists so an installed turtle can say which build it is running.
-return { build = "01e9e6f5", made = "2026-09-15 18:03 UTC" }
+return { build = "e07f36c3", made = "2026-09-15 18:15 UTC" }
 ]=]
 
 order[#order + 1] = "wall/wall.lua"
@@ -3359,6 +3539,6 @@ end
 
 print("")
 print(written .. " files written, " .. kept .. " kept.")
-print("build 01e9e6f5  (2026-09-15 18:03 UTC)")
+print("build e07f36c3  (2026-09-15 18:15 UTC)")
 print("")
 print("Next:  wall/wall check")

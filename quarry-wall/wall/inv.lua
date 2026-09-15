@@ -131,6 +131,72 @@ function inv.stage(dst, name, count)
   return have >= count
 end
 
+local IS_GRID = {}
+for _, s in ipairs(inv.GRID) do IS_GRID[s] = true end
+
+--[[--------------------------------------------------------------------------
+  stageOnly -- lay out exactly the recipe, and prove nothing else is on board.
+
+  turtle.craft() matches against the whole inventory, so "the grid is right" is
+  not enough -- every other slot has to be empty too. This puts `steps` of each
+  ingredient in its cell and then checks the rest of the turtle is bare,
+  failing loudly rather than handing turtle.craft() something it will reject
+  with an unhelpful "No matching recipes".
+----------------------------------------------------------------------------]]
+function inv.stageOnly(cellList, steps)
+  local isCell = {}
+  for _, c in ipairs(cellList) do isCell[c.slot] = true end
+
+  --- Somewhere to put things that is not part of the crafting grid at all.
+  local function spillTo(name)
+    for _, s in ipairs(inv.ALL) do
+      if not IS_GRID[s] then
+        if turtle.getItemCount(s) == 0 then return s end
+        if inv.nameAt(s) == name and turtle.getItemSpace(s) > 0 then return s end
+      end
+    end
+    return nil
+  end
+
+  -- Start from an empty grid, so a cell holding the wrong thing -- or too much
+  -- of the right thing -- cannot survive into the craft.
+  for _, s in ipairs(inv.GRID) do
+    while turtle.getItemCount(s) > 0 do
+      local dest = spillTo(inv.nameAt(s))
+      if not dest then return false, "no room to clear the crafting grid" end
+      turtle.select(s)
+      if not turtle.transferTo(dest) then
+        return false, "could not clear the crafting grid"
+      end
+    end
+  end
+
+  for _, c in ipairs(cellList) do
+    local have = 0
+    for _, s in ipairs(inv.ALL) do
+      if have >= steps then break end
+      if not isCell[s] and inv.nameAt(s) == c.item then
+        turtle.select(s)
+        turtle.transferTo(c.slot, steps - have)
+        have = turtle.getItemCount(c.slot)
+      end
+    end
+    if have ~= steps then
+      return false, ("wanted %d of %s in slot %d, got %d")
+                    :format(steps, c.item, c.slot, have)
+    end
+  end
+
+  for _, s in ipairs(inv.ALL) do
+    if not isCell[s] and turtle.getItemCount(s) > 0 then
+      return false, ("slot %d still holds %s -- craft would be refused")
+                    :format(s, tostring(inv.nameAt(s)))
+    end
+  end
+
+  return true
+end
+
 --- Consolidate part-stacks of the same item so free slots come back.
 function inv.compact()
   for i = #inv.ALL, 1, -1 do

@@ -322,24 +322,121 @@ end
   Restocking
 ----------------------------------------------------------------------------]]
 
-local function pullRaw(cfg, target, keepGridClear)
+--- Which peripheral side a station entry sits on, for reading a chest.
+local function peripheralSide(side)
+  if side == "up"   then return "top" end
+  if side == "down" then return "bottom" end
+  return "front"
+end
+
+--[[--------------------------------------------------------------------------
+  The overflow chest
+
+  turtle.craft() matches against the whole inventory, so the turtle has to be
+  completely empty to craft anything. Everything it is carrying goes here in
+  the meantime, along with the odd few blocks stranded when the pattern changes
+  from one type to the next.
+
+  Which means the chest gradually fills with blocks that are already made. They
+  get looked for before crafting anything, so the pattern coming back round to
+  a type it has built before costs nothing.
+----------------------------------------------------------------------------]]
+
+--- Put everything on board into the overflow chest, optionally keeping up to
+--- `keepMax` of `keepName`.
+function build.park(cfg, keepName, keepMax)
+  local spec = cfg.station.overflow
+  if not spec then
+    for _, s in ipairs(inv.ALL) do
+      if turtle.getItemCount(s) > 0 then return false end
+    end
+    return true
+  end
+
+  if not nav.reach(spec) then return false end
+
+  local kept = 0
+  for _, s in ipairs(inv.ALL) do
+    local held = turtle.getItemCount(s)
+    if held > 0 then
+      local drop = held
+      if keepName and inv.nameAt(s) == keepName then
+        local keep = math.min(held, math.max(0, (keepMax or math.huge) - kept))
+        kept = kept + keep
+        drop = held - keep
+      end
+      if drop > 0 then
+        turtle.select(s)
+        if not nav.dropAt(spec, drop) then return false end
+      end
+    end
+  end
+
+  return true
+end
+
+--- How many of `name` are already sitting in the overflow chest. Reading the
+--- chest costs nothing, so this is always worth doing before crafting.
+function build.readyInOverflow(cfg, name)
+  local spec = cfg.station.overflow
+  if not spec or not peripheral then return 0 end
+  if not nav.reach(spec) then return 0 end
+
+  local ok, chest = pcall(peripheral.wrap, peripheralSide(spec.side or "front"))
+  if not ok or type(chest) ~= "table" or not chest.list then return 0 end
+
+  local listed, items = pcall(chest.list)
+  if not listed or type(items) ~= "table" then return 0 end
+
+  local n = 0
+  for _, item in pairs(items) do
+    if item and item.name == name then n = n + (item.count or 0) end
+  end
+  return n
+end
+
+--- Take up to `want` of `name` back out of the overflow, returning anything
+--- else that comes up with it.
+function build.collect(cfg, name, want)
+  local spec = cfg.station.overflow
+  if not spec then return inv.count(name) end
+  if not nav.reach(spec) then return inv.count(name) end
+
+  for _ = 1, 64 do
+    if inv.count(name) >= want then break end
+    local slot = inv.firstEmpty(inv.ALL)
+    if not slot then break end
+    turtle.select(slot)
+    if not nav.suckAt(spec, 64) then break end
+  end
+
+  build.park(cfg, name, want)
+  return inv.count(name)
+end
+
+--[[--------------------------------------------------------------------------
+  Taking cobbled deepslate from the supply chest.
+
+  Exactly `target` and not one more: a single spare block is enough to make
+  every craft that follows fail.
+----------------------------------------------------------------------------]]
+local function pullRaw(cfg, target)
   local spec = cfg.station.supply
   local stalls = 0
 
   while inv.count(craft.RAW) < target do
-    local slot = inv.firstEmpty(keepGridClear and inv.STORAGE or inv.ALL)
-    if not slot then break end        -- full up; go build with what we have
+    local slot = inv.firstEmpty(inv.ALL)
+    if not slot then return false, "no free slot for cobbled deepslate" end
 
     turtle.select(slot)
-    local before = inv.count(craft.RAW)
-    local got    = nav.suckAt(spec, 64)
-    if keepGridClear then inv.clearGrid() end
+    local take = math.min(64, target - inv.count(craft.RAW))
 
-    if got then
+    if nav.suckAt(spec, take) then
       stalls = 0
-      if inv.count(craft.RAW) == before then
-        return false, "the supply chest holds something that is not cobbled "
-                   .. "deepslate -- it must contain only cobbled deepslate"
+      local got = inv.nameAt(slot)
+      if got and got ~= craft.RAW then
+        return false, ("the supply chest holds %s -- it must contain only "
+                    .. "cobbled deepslate"):format(got)
       end
     else
       stalls = stalls + 1
@@ -354,52 +451,54 @@ local function pullRaw(cfg, target, keepGridClear)
   return true
 end
 
-local function dumpUnneeded(cfg, stillNeeded)
-  local spec = cfg.station.overflow
-  if not spec then return end
+--[[--------------------------------------------------------------------------
+  restock -- come home and load up with `block`.
 
-  for _, s in ipairs(inv.ALL) do
-    local name = inv.nameAt(s)
-    if name and name ~= craft.RAW and not stillNeeded[name] then
-      turtle.select(s)
-      nav.dropAt(spec, turtle.getItemCount(s))
-    end
-  end
-end
-
+  For plain cobbled deepslate there is nothing to craft, so it just fills up.
+  Anything else has to be made, and making it means emptying the turtle first.
+----------------------------------------------------------------------------]]
 function build.restock(cfg, block, want, stillNeeded)
   if not nav.goHome() then return 0, "could not get back to the station" end
 
   local ok, err = build.refuel(cfg)
   if not ok then return 0, err end
 
-  dumpUnneeded(cfg, stillNeeded)
-  inv.compact()
-
-  local short = want - inv.count(block)
-  if short <= 0 then return inv.count(block) end
-
-  local crafted = block ~= craft.RAW
-
-  -- A little slack: every stage of a chain rounds up to its recipe output
-  -- size, so asking for exactly enough occasionally lands one short.
-  local rawTarget
-  if crafted then
-    rawTarget = math.ceil(craft.rawCost(block) * short) + 8
-  else
-    rawTarget = want
+  if block == craft.RAW then
+    if not build.park(cfg, block, want) then
+      return 0, "could not clear the inventory"
+    end
+    local pulled, perr = pullRaw(cfg, want)
+    if not pulled then return inv.count(block), perr end
+    return inv.count(block)
   end
 
-  local pulled, perr = pullRaw(cfg, rawTarget, crafted)
-  if not pulled then return inv.count(block), perr end
-
-  if crafted then
-    local made, cerr = craft.ensure(block, want)
-    if not made then return inv.count(block), cerr end
+  if not cfg.station.overflow then
+    return 0, "this pattern needs crafting, and crafting needs the turtle to "
+           .. "be empty -- set station.overflow in config.lua so it has "
+           .. "somewhere to put things"
   end
 
-  inv.compact()
-  return inv.count(block)
+  -- Everything off the turtle: it has to be bare to craft at all.
+  if not build.park(cfg) then return 0, "could not clear the inventory" end
+
+  -- Some of what we want may already be made and waiting.
+  local shortfall = want - build.readyInOverflow(cfg, block)
+
+  while shortfall > 0 do
+    local plan, perr = craft.planBatch(block, shortfall)
+    if not plan then return 0, perr end
+
+    local pulled, rerr = pullRaw(cfg, plan.raw)
+    if not pulled then return 0, rerr end
+
+    local made, cerr = craft.runBatch(plan)
+    if not made then return 0, cerr end
+
+    if not build.park(cfg) then return 0, "could not park the finished batch" end
+    shortfall = shortfall - plan.out
+  end
+
+  return build.collect(cfg, block, want)
 end
 
 --[[--------------------------------------------------------------------------
