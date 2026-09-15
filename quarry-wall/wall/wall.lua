@@ -607,13 +607,21 @@ function cmd.patrol(args)
 
   report.identify({ turtle = index, turtles = turtles,
                     from = from, to = to, courses = courses })
-  report.now({ state = "patrolling" })
+  report.now({ state = "restocking", course = from, cells = #cells })
 
   local loaded, lerr = build.loadKit(cfg, list, 64)
-  if not loaded then die(lerr) end
+  if not loaded then
+    report.now({ state = "stopped", error = tostring(lerr) })
+    die(lerr)
+  end
+
+  report.now({ state = "patrolling", course = from, cell = 0, cells = #cells })
 
   local done, result = build.patrol(cfg, cells, layers, from, to)
-  if not done then die(result) end
+  if not done then
+    report.now({ state = "stopped", error = tostring(result) })
+    die(result)
+  end
 
   print("")
   print(("Checked %d cells. Filled %d holes.")

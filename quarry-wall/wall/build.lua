@@ -957,6 +957,20 @@ function build.patrol(cfg, cells, layers, from, to)
   for idx, c in ipairs(cells) do
     local look = lookoutFor(cells, indexOf, c)
 
+    -- A column can take a while, and the monitor calls a turtle "quiet" after
+    -- half a minute of silence. Speak up once per column, and again every few
+    -- courses inside it, so a patrol looks alive rather than hung.
+    --- `placed`/`skipped`/`missed` keep the same meaning they have during a
+    --- build, so the monitor's columns still read correctly: holes filled,
+    --- corners passed over, cells that could not be dealt with.
+    local function say(send, course)
+      send({ state = "patrolling", course = course, cell = idx,
+             cells = #cells, placed = filled, skipped = corners,
+             missed = missed, fuel = turtle.getFuelLevel() })
+    end
+
+    say(report.now, from)
+
     if not look then
       corners = corners + 1
     else
@@ -970,6 +984,8 @@ function build.patrol(cfg, cells, layers, from, to)
       local reached = nav.goTo(look.x, base + (first - 1), look.z)
       if not reached then
         missed = missed + (math.abs(to - from) + 1)
+        logHole(cfg, "patrol", first, idx, #cells,
+                "UNREACHABLE -- could not get beside the column")
       else
         nav.turnTo(look.h)
 
@@ -982,6 +998,7 @@ function build.patrol(cfg, cells, layers, from, to)
           end
 
           checked = checked + 1
+          say(report.tick, course)
 
           if not turtle.detect() then
             local block = layers[course]
@@ -990,6 +1007,10 @@ function build.patrol(cfg, cells, layers, from, to)
               for i = from, to do kit[layers[i]] = true end
               local list = {}
               for name in pairs(kit) do list[#list + 1] = name end
+
+              report.now({ state = "restocking", course = course, cell = idx,
+                           cells = #cells, block = shortName(block),
+                           placed = filled, skipped = corners, missed = missed })
 
               local got, kerr = build.loadKit(cfg, list, 64)
               if not got then return false, kerr end
@@ -1003,6 +1024,8 @@ function build.patrol(cfg, cells, layers, from, to)
               logHole(cfg, "fixed", course, idx, #cells, "filled")
             else
               missed = missed + 1
+              logHole(cfg, "patrol", course, idx, #cells,
+                      "COULD NOT PLACE " .. shortName(block))
             end
           end
         end

@@ -1133,6 +1133,86 @@ report.close()
 
 
 --[[--------------------------------------------------------------------------
+  10b-ii. A patrol on the monitor
+
+  A patrol is started by hand, long after the launch, so the monitor only
+  learns about it from what the turtles broadcast. Say nothing and it calls
+  them "quiet" after half a minute, which is the whole screen gone.
+----------------------------------------------------------------------------]]
+
+section("patrol reporting")
+
+mock.reset()
+mock.setModem("right")
+report.close()
+report.open(cfg)
+report.identify({ turtle = 2, turtles = 8, from = 1, to = 3, courses = 12 })
+
+buildQuarry(0, 0)
+station(SX, SZ, 0)
+
+local prCells  = ring.survey(cfg.ring)
+local prLayers = pattern.layers(cfg.pattern, COURSES)
+local prBase   = scan.baseY(cfg)
+
+-- A wall with a few gaps in it, so the patrol has something to do.
+for course = 1, 3 do
+  local wy = 1 + prBase + (course - 1)
+  for _, c in ipairs(prCells) do
+    mock.setBlock(c.x + SX, wy, c.z + SZ, prLayers[course])
+  end
+end
+for i, c in ipairs(prCells) do
+  if i % 7 == 0 then mock.setBlock(c.x + SX, 1 + prBase, c.z + SZ, nil) end
+end
+
+station(SX, SZ, 0)
+local prRing = ring.survey(cfg.ring)
+
+local prKit = {}
+for i = 1, 3 do prKit[prLayers[i]] = true end
+local prList = {}
+for name in pairs(prKit) do prList[#prList + 1] = name end
+
+build.loadKit(cfg, prList, 64)
+mock.clearSent()
+
+local prOk = build.patrol(cfg, prRing, prLayers, 1, 3)
+ok(prOk, "the patrol ran")
+
+local prStates, prKinds, prStatus = {}, {}, nil
+for _, m in ipairs(mock.sent()) do
+  prKinds[m.msg.kind] = (prKinds[m.msg.kind] or 0) + 1
+  if m.msg.state then prStates[m.msg.state] = true end
+  if m.msg.state == "patrolling" and not prStatus then prStatus = m.msg end
+end
+
+ok(prStates.patrolling, "the patrol says it is patrolling")
+ok(prKinds.hole and prKinds.hole > 0, "and logs the holes it fills")
+
+if prStatus then
+  eq(prStatus.turtle, 2, "the patrol status names the turtle")
+  eq(prStatus.from, 1, "and carries the band it is checking")
+  eq(prStatus.to, 3, "and the end of that band")
+  eq(prStatus.cells, #prRing, "and the size of the ring")
+  ok(prStatus.cell and prStatus.cell >= 1,
+     "and where round the ring it has got to")
+end
+
+-- The monitor has to treat "patrolling" as work in progress, the same as
+-- building: otherwise a monitor restarted mid-patrol sits in the lobby
+-- forever and never shows the turtles that are already out there.
+local mfh = io.open("wall/monitor.lua", "r")
+local monitorSrc = mfh and mfh:read("*a") or ""
+if mfh then mfh:close() end
+ok(monitorSrc:find("patrolling", 1, true) ~= nil,
+   "the monitor knows the patrolling state")
+
+mock.setModem(nil)
+report.close()
+
+
+--[[--------------------------------------------------------------------------
   10c. Enlisting and being assigned a slot
 ----------------------------------------------------------------------------]]
 

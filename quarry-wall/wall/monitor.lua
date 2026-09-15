@@ -62,6 +62,10 @@ local nextInner              -- who to send off to trace the pad ring next
 local readyCells = {}        -- index -> cell count it worked out
 local halted, note, assigned
 
+-- States that mean a turtle is out doing the job, whether it was launched
+-- from here or started by hand.
+local WORKING = { building = true, restocking = true, patrolling = true }
+
 local function now() return os.clock() end
 
 local function indexOf(id)
@@ -241,15 +245,19 @@ local function handle(msg)
 
   if not msg.turtle then return end
 
-  -- Turtles restarted by hand with `wall build` or `wall resume` never go
-  -- through the lobby, so a launch left half finished would sit waiting for
-  -- turtles that are already working. Anything actually building means the
-  -- fleet has moved on, so move on with it.
-  if phase ~= "watch"
-  and (msg.state == "building" or msg.state == "restocking") then
+  -- Turtles restarted by hand with `wall build`, `wall resume` or `wall
+  -- patrol` never go through the lobby, so a launch left half finished would
+  -- sit waiting for turtles that are already working. Anything actually at
+  -- work means the fleet has moved on, so move on with it.
+  if phase ~= "watch" and WORKING[msg.state] then
     phase = "watch"
     assigned = true
   end
+
+  -- A patrol is started by hand and never goes through the assignment, so the
+  -- course count has to come off the turtles themselves. Without it the
+  -- coverage line has nothing to check against.
+  if not courses and msg.courses then courses = msg.courses end
 
   local t = seen[msg.turtle] or {}
   for k, v in pairs(msg) do t[k] = v end
@@ -390,6 +398,11 @@ local function drawWatch()
     elseif t.state == "done"       then doing = "done"
     elseif t.state == "stopped"    then doing = "STOPPED"
     elseif t.state == "restocking" then doing = "restock c" .. tostring(t.course)
+    elseif t.state == "patrolling" then
+      -- A patrol counts its way round the ring rather than up the courses, so
+      -- the cell is the useful number and the course is where it is in the
+      -- column it happens to be on.
+      doing = ("patrol %s/%s"):format(tostring(t.cell), tostring(t.cells))
     else doing = ("c%s %s/%s"):format(tostring(t.course), tostring(t.cell),
                                       tostring(t.cells)) end
 
