@@ -214,6 +214,18 @@ function build.refuel(cfg)
                   :format(turtle.getFuelLevel(), cfg.fuel.reserve)
   end
 
+  -- Chicken and egg: the fuel chest is reached by moving, and moving costs
+  -- fuel. A turtle handed no fuel at all can never get to it, and would
+  -- otherwise sit here for ten minutes before reporting an empty chest that is
+  -- in fact full.
+  local o = spec.offset or { 0, 0, 0 }
+  if (o[1] ~= 0 or o[2] ~= 0 or o[3] ~= 0)
+  and turtle.getFuelLevel() < 8 then
+    return false, "out of fuel, and the fuel chest needs a move to reach -- "
+               .. "put a coal block (or a few coal) straight into the turtle "
+               .. "to get it started"
+  end
+
   for attempt = 1, 120 do
     local slot = inv.firstEmpty(inv.ALL)
     if slot then

@@ -646,6 +646,30 @@ report.close()
 
 section("guards")
 
+-- A turtle handed no fuel cannot reach a fuel chest that needs a move.
+mock.reset()
+buildQuarry(0, 0)
+station(SX, SZ, 0)
+mock.T.fuel = 0
+
+local fok, ferr = build.refuel(cfg)
+ok(not fok, "a turtle with no fuel at all reports rather than stalling")
+ok(ferr and ferr:find("straight into the turtle"),
+   "and says how to get it started: " .. tostring(ferr))
+
+-- With a little fuel on board it bootstraps itself off the chest.
+mock.reset()
+buildQuarry(0, 0)
+station(SX, SZ, 0)
+mock.T.fuel = 0
+mock.T.slots[1] = { name = M("coal_block"), count = 2 }
+
+fok, ferr = build.refuel(cfg)
+ok(fok, "a coal block in the inventory is enough to start: " .. tostring(ferr))
+ok(turtle.getFuelLevel() >= cfg.fuel.reserve, "and it fuelled up properly")
+
+mock.T.fuel = 100000
+
 local onRing = {}
 for _, c in ipairs(square) do onRing[#onRing + 1] = c end
 local bad, berr = build.run(cfg, onRing, { M("cobbled_deepslate") }, 1, 1, 1,
