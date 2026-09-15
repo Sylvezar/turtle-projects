@@ -24,8 +24,9 @@
   ring meanwhile -- and the monitor hands the answer to everyone.
 ----------------------------------------------------------------------------]]
 
-local nav  = require("nav")
-local ring = require("ring")
+local nav   = require("nav")
+local ring  = require("ring")
+local craft = require("craft")
 
 local scan = {}
 
@@ -59,7 +60,16 @@ local function climbToRoof(cfg)
   local y = 0
 
   while y < cfg.height.max do
-    if turtle.detectUp() then return y end
+    local solid, above = turtle.inspectUp()
+    if solid then
+      -- Is that the ceiling, or a wall we built earlier? Anything the turtles
+      -- know how to craft was not put there by the world, so it is ours -- and
+      -- measuring the pit against our own wall gives a nonsense answer.
+      if type(above) == "table" and craft.recipeFor(above.name) then
+        return y, nil, true
+      end
+      return y
+    end
     if not nav.up() then return y end
     y = y + 1
   end
@@ -139,6 +149,16 @@ function scan.height(cfg, cells, opts)
 
   local mode = (cfg.height and cfg.height.stopAt) or "roof"
 
+  -- Nothing to measure against: the answer is already known and the climb
+  -- would only get in the way.
+  if mode == "given" then
+    local given = cfg.height.suggest
+    if not given then
+      return nil, "height.stopAt is \"given\" but height.suggest is not set"
+    end
+    return given
+  end
+
   -- "rim" watches the pit face beside it, so it wants a corner: two faces mean
   -- one cave cannot end the climb on its own. "roof" only looks up, so any
   -- cell will do and the nearest is free.
@@ -151,12 +171,12 @@ function scan.height(cfg, cells, opts)
     return nil, "could not reach the ring corner to measure height"
   end
 
-  local top, note
+  local top, note, hitOurWall
 
   if mode == "rim" then
     top, note = climbToRim(cfg, corner)
   else
-    top, note = climbToRoof(cfg)
+    top, note, hitOurWall = climbToRoof(cfg)
   end
 
   -- The scout measures this while the others are using the launch pad, so it
@@ -167,6 +187,19 @@ function scan.height(cfg, cells, opts)
 
   local base = scan.baseY(cfg)
   local courses = top - base + 1
+
+  -- Once some of the wall is standing the climb runs into it rather than the
+  -- ceiling, and measures the wall instead of the pit. There is nothing left
+  -- to measure against, so fall back on the number in the config.
+  if hitOurWall then
+    if cfg.height.suggest then
+      return cfg.height.suggest,
+             ("the climb ran into wall already built, so the pit cannot be "
+           .. "measured -- using height.suggest (%d)"):format(cfg.height.suggest)
+    end
+    return nil, "the climb ran into wall already built, and height.suggest is "
+             .. "not set to fall back on"
+  end
 
   if courses < 1 then
     return nil, ("nothing to build -- the wall base sits at +%d but the climb "

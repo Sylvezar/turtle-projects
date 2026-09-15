@@ -241,6 +241,16 @@ local function handle(msg)
 
   if not msg.turtle then return end
 
+  -- Turtles restarted by hand with `wall build` or `wall resume` never go
+  -- through the lobby, so a launch left half finished would sit waiting for
+  -- turtles that are already working. Anything actually building means the
+  -- fleet has moved on, so move on with it.
+  if phase ~= "watch"
+  and (msg.state == "building" or msg.state == "restocking") then
+    phase = "watch"
+    assigned = true
+  end
+
   local t = seen[msg.turtle] or {}
   for k, v in pairs(msg) do t[k] = v end
   t.last = now()
@@ -355,7 +365,8 @@ local function drawScan()
 
   local ready = 0
   for _ in pairs(readyCells) do ready = ready + 1 end
-  footer(("%d of %d have the ring"):format(ready, #waiting))
+  footer(("%d of %d have the ring -- W to give up and just watch")
+         :format(ready, #waiting))
 end
 
 local function drawWatch()
@@ -441,8 +452,16 @@ while true do
   elseif name == "timer" then
     if event[2] == redraw then redraw = os.startTimer(1) end
 
-  elseif name == "key" and phase == "lobby" then
-    if event[2] == keys.enter then beginLaunch() end
+  elseif name == "key" then
+    if phase == "lobby" and event[2] == keys.enter then
+      beginLaunch()
+    elseif phase ~= "lobby" and phase ~= "watch" and event[2] == keys.w then
+      -- Give up on the launch and just watch. For when some turtles have been
+      -- restarted by hand and the scan will never finish.
+      phase = "watch"
+      assigned = true
+      note = "launch abandoned; watching only"
+    end
   end
 
   draw()

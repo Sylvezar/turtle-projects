@@ -1070,6 +1070,10 @@ config.station = {
   what it reports, and type that number into all of them.
 
   stopAt    what stops the climb.
+              "given"  do not climb at all; use `suggest`. Once any of the
+                       wall is standing the climb runs into it, so this is
+                       what to use when resuming a job you have already
+                       measured.
               "roof"  something overhead. For a pit dug underground. Caves in
                       the pit face cannot fool it, so prefer this when it
                       applies.
@@ -2208,6 +2212,16 @@ local function handle(msg)
 
   if not msg.turtle then return end
 
+  -- Turtles restarted by hand with `wall build` or `wall resume` never go
+  -- through the lobby, so a launch left half finished would sit waiting for
+  -- turtles that are already working. Anything actually building means the
+  -- fleet has moved on, so move on with it.
+  if phase ~= "watch"
+  and (msg.state == "building" or msg.state == "restocking") then
+    phase = "watch"
+    assigned = true
+  end
+
   local t = seen[msg.turtle] or {}
   for k, v in pairs(msg) do t[k] = v end
   t.last = now()
@@ -2322,7 +2336,8 @@ local function drawScan()
 
   local ready = 0
   for _ in pairs(readyCells) do ready = ready + 1 end
-  footer(("%d of %d have the ring"):format(ready, #waiting))
+  footer(("%d of %d have the ring -- W to give up and just watch")
+         :format(ready, #waiting))
 end
 
 local function drawWatch()
@@ -2408,8 +2423,16 @@ while true do
   elseif name == "timer" then
     if event[2] == redraw then redraw = os.startTimer(1) end
 
-  elseif name == "key" and phase == "lobby" then
-    if event[2] == keys.enter then beginLaunch() end
+  elseif name == "key" then
+    if phase == "lobby" and event[2] == keys.enter then
+      beginLaunch()
+    elseif phase ~= "lobby" and phase ~= "watch" and event[2] == keys.w then
+      -- Give up on the launch and just watch. For when some turtles have been
+      -- restarted by hand and the scan will never finish.
+      phase = "watch"
+      assigned = true
+      note = "launch abandoned; watching only"
+    end
   end
 
   draw()
@@ -3359,8 +3382,9 @@ files["wall/scan.lua"] = [=[
   ring meanwhile -- and the monitor hands the answer to everyone.
 ----------------------------------------------------------------------------]]
 
-local nav  = require("nav")
-local ring = require("ring")
+local nav   = require("nav")
+local ring  = require("ring")
+local craft = require("craft")
 
 local scan = {}
 
@@ -3394,7 +3418,16 @@ local function climbToRoof(cfg)
   local y = 0
 
   while y < cfg.height.max do
-    if turtle.detectUp() then return y end
+    local solid, above = turtle.inspectUp()
+    if solid then
+      -- Is that the ceiling, or a wall we built earlier? Anything the turtles
+      -- know how to craft was not put there by the world, so it is ours -- and
+      -- measuring the pit against our own wall gives a nonsense answer.
+      if type(above) == "table" and craft.recipeFor(above.name) then
+        return y, nil, true
+      end
+      return y
+    end
     if not nav.up() then return y end
     y = y + 1
   end
@@ -3474,6 +3507,16 @@ function scan.height(cfg, cells, opts)
 
   local mode = (cfg.height and cfg.height.stopAt) or "roof"
 
+  -- Nothing to measure against: the answer is already known and the climb
+  -- would only get in the way.
+  if mode == "given" then
+    local given = cfg.height.suggest
+    if not given then
+      return nil, "height.stopAt is \"given\" but height.suggest is not set"
+    end
+    return given
+  end
+
   -- "rim" watches the pit face beside it, so it wants a corner: two faces mean
   -- one cave cannot end the climb on its own. "roof" only looks up, so any
   -- cell will do and the nearest is free.
@@ -3486,12 +3529,12 @@ function scan.height(cfg, cells, opts)
     return nil, "could not reach the ring corner to measure height"
   end
 
-  local top, note
+  local top, note, hitOurWall
 
   if mode == "rim" then
     top, note = climbToRim(cfg, corner)
   else
-    top, note = climbToRoof(cfg)
+    top, note, hitOurWall = climbToRoof(cfg)
   end
 
   -- The scout measures this while the others are using the launch pad, so it
@@ -3502,6 +3545,19 @@ function scan.height(cfg, cells, opts)
 
   local base = scan.baseY(cfg)
   local courses = top - base + 1
+
+  -- Once some of the wall is standing the climb runs into it rather than the
+  -- ceiling, and measures the wall instead of the pit. There is nothing left
+  -- to measure against, so fall back on the number in the config.
+  if hitOurWall then
+    if cfg.height.suggest then
+      return cfg.height.suggest,
+             ("the climb ran into wall already built, so the pit cannot be "
+           .. "measured -- using height.suggest (%d)"):format(cfg.height.suggest)
+    end
+    return nil, "the climb ran into wall already built, and height.suggest is "
+             .. "not set to fall back on"
+  end
 
   if courses < 1 then
     return nil, ("nothing to build -- the wall base sits at +%d but the climb "
@@ -3518,7 +3574,7 @@ order[#order + 1] = "wall/version.lua"
 files["wall/version.lua"] = [=[
 -- Generated by tools/make_installer.py. Not part of the source tree;
 -- it exists so an installed turtle can say which build it is running.
-return { build = "e4ba0d8a", made = "2026-09-15 19:37 UTC" }
+return { build = "684a81b9", made = "2026-09-15 19:45 UTC" }
 ]=]
 
 order[#order + 1] = "wall/wall.lua"
@@ -4198,7 +4254,7 @@ if stale then
   printError("")
   printError("  rm wall/config.lua   then install again")
 end
-print("build e4ba0d8a  (2026-09-15 19:37 UTC)")
+print("build 684a81b9  (2026-09-15 19:45 UTC)")
 
 -- Anything after the url is handed straight to the program, so one line both
 -- installs and starts a turtle:

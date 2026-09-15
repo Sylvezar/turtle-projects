@@ -539,6 +539,23 @@ end
 local caved = scan.height(cfg, hcells)
 eq(caved, courses, "a cave in the face does not fool roof mode")
 
+-- Once some of the wall is standing, the climb hits that rather than the
+-- ceiling. Measuring the pit against our own wall gives nonsense, so it falls
+-- back on the configured height and says why.
+local wallY = 1 + scan.baseY(cfg)
+for _, c in ipairs(hcells) do
+  mock.setBlock(c.x + SX, wallY, c.z + SZ, M("deepslate_tiles"))
+end
+
+local blockedH, blockedNote = scan.height(cfg, hcells)
+eq(blockedH, cfg.height.suggest, "falls back on the configured height")
+ok(blockedNote and blockedNote:find("already built"),
+   "and says why: " .. tostring(blockedNote))
+
+for _, c in ipairs(hcells) do
+  mock.setBlock(c.x + SX, wallY, c.z + SZ, nil)
+end
+
 -- Rim mode still works where there is genuinely open sky.
 mock.reset()
 buildQuarry(0, 0)

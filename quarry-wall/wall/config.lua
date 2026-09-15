@@ -182,6 +182,10 @@ config.station = {
   what it reports, and type that number into all of them.
 
   stopAt    what stops the climb.
+              "given"  do not climb at all; use `suggest`. Once any of the
+                       wall is standing the climb runs into it, so this is
+                       what to use when resuming a job you have already
+                       measured.
               "roof"  something overhead. For a pit dug underground. Caves in
                       the pit face cannot fool it, so prefer this when it
                       applies.
