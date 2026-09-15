@@ -288,7 +288,7 @@ function ring.survey(spec, opts)
     if cached then
       if cacheStillGood(spec, cached) then
         if opts.onFound then opts.onFound() end
-        nav.goHome()
+        if not opts.stayOut then nav.goHome() end
         return cached
       end
       ring.clearCache(spec)
@@ -307,7 +307,10 @@ function ring.survey(spec, opts)
   if not cells then nav.goHome() return nil, terr end
 
   local canon, cerr = ring.canonicalise(cells)
-  nav.goHome()
+  -- The scout measures the height straight after this, from where it already
+  -- stands. Walking home first and then back out to the ring is two crossings
+  -- of the pit for nothing.
+  if not opts.stayOut then nav.goHome() end
   if not canon then return nil, cerr end
 
   -- Free, so it runs on every trace rather than only when asked.

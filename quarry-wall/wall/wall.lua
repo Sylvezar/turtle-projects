@@ -384,6 +384,7 @@ function cmd.join()
     -- at once is how the first attempt ended.
     local outerErr
     mine, outerErr = ring.survey(cfg.ring, {
+      stayOut = true,
       onFound = function() report.now({ kind = "padclear" }) end,
     })
     if not mine then die("wall ring: " .. tostring(outerErr)) end

@@ -161,9 +161,33 @@ local function handle(msg)
   if type(msg) ~= "table" then return end
 
   if msg.kind == "enlist" and msg.id then
-    if phase == "lobby" and not enlisted[msg.id] then
-      enlisted[msg.id] = true
-      waiting[#waiting + 1] = { id = msg.id, label = msg.label }
+    if phase == "lobby" then
+      if not enlisted[msg.id] then
+        enlisted[msg.id] = true
+        waiting[#waiting + 1] = { id = msg.id, label = msg.label }
+      end
+      return
+    end
+
+    -- A turtle we already know, shouting again: it crashed and was restarted.
+    -- Put it back where the fleet has got to rather than making the whole
+    -- launch start over, which is otherwise the only way back in.
+    local i = indexOf(msg.id)
+    if not i then return end
+
+    if phase == "scan" then
+      if i == 1 then
+        tell(msg.id, { kind = "role", role = "scout" })
+      elseif nextInner and i <= nextInner then
+        tell(msg.id, { kind = "role", role = "inner" })
+      end
+    elseif phase == "share" and scoutData then
+      tell(msg.id, { kind = "rings",
+                     inner = scoutData.inner, outer = scoutData.outer })
+    elseif phase == "watch" and courses then
+      tell(msg.id, { kind = "assign", index = i,
+                     turtles = #waiting, courses = courses })
+      note = ("turtle %d rejoined"):format(i)
     end
     return
   end
@@ -207,6 +231,11 @@ local function handle(msg)
   if msg.kind == "ready" and who then
     readyCells[who] = msg.cells
     assignAll()
+    return
+  end
+
+  if msg.kind == "rejoined" and who then
+    halted = false
     return
   end
 

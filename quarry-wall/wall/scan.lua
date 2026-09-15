@@ -122,16 +122,35 @@ end
 --[[--------------------------------------------------------------------------
   height -- courses from the wall's base up to whatever stops it.
 ----------------------------------------------------------------------------]]
+--- Whichever ring cell we are already closest to. "roof" mode only needs to be
+--- somewhere on the ring, so there is no reason to walk to a particular corner.
+local function nearestCell(cells)
+  local p = nav.pos()
+  local best, bestD = cells[1], math.huge
+  for _, c in ipairs(cells) do
+    local d = math.abs(c.x - p.x) + math.abs(c.z - p.z)
+    if d < bestD then best, bestD = c, d end
+  end
+  return best
+end
+
 function scan.height(cfg, cells, opts)
   opts = opts or {}
-  local corner = pickCorner(cells)
+
+  local mode = (cfg.height and cfg.height.stopAt) or "roof"
+
+  -- "rim" watches the pit face beside it, so it wants a corner: two faces mean
+  -- one cave cannot end the climb on its own. "roof" only looks up, so any
+  -- cell will do and the nearest is free.
+  local corner
+  if mode == "rim" then corner = pickCorner(cells)
+  else corner = nearestCell(cells) end
 
   if not nav.goTo(corner.x, 0, corner.z) then
     if not opts.stayOut then nav.goHome() end
     return nil, "could not reach the ring corner to measure height"
   end
 
-  local mode = (cfg.height and cfg.height.stopAt) or "roof"
   local top, note
 
   if mode == "rim" then
