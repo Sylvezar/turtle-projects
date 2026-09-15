@@ -265,6 +265,61 @@ for _ in pairs(bandTypes) do n = n + 1 end
 eq(n, 4, "a full cycle uses four distinct blocks")
 
 --[[--------------------------------------------------------------------------
+  2c. Staging a full batch
+----------------------------------------------------------------------------]]
+
+section("staging")
+
+--- Put `n` of `name` on board, filling slots in order the way pullRaw does.
+local function loadUp(name, n)
+  for i = 1, 16 do mock.T.slots[i] = nil end
+  local left, slot = n, 1
+  while left > 0 and slot <= 16 do
+    local put = math.min(64, left)
+    mock.T.slots[slot] = { name = name, count = put }
+    left, slot = left - put, slot + 1
+  end
+  turtle.select(1)
+end
+
+-- 232 cobbled deepslate lands as 64,64,64,40 across slots 1 to 4. Clearing the
+-- grid then has to move a full stack into a slot with only part of a stack's
+-- room -- which the turtle reports as a failure even though it moved what
+-- fitted. Getting that wrong strands the turtle mid-stage.
+loadUp(M("cobbled_deepslate"), 232)
+
+local polished = craft.recipeFor(M("polished_deepslate"))
+ok(polished ~= nil, "found the polished deepslate recipe")
+
+if polished then
+  local staged, serr = inv.stageOnly(craft.cells(polished), 58)
+  ok(staged, "staged a full 232 block batch: " .. tostring(serr))
+
+  if staged then
+    local cellSlots = { [1] = true, [2] = true, [5] = true, [6] = true }
+    local wrong = 0
+    for slot = 1, 16 do
+      local held = turtle.getItemCount(slot)
+      if cellSlots[slot] then
+        if held ~= 58 then wrong = wrong + 1 end
+      elseif held > 0 then
+        wrong = wrong + 1
+      end
+    end
+    eq(wrong, 0, "58 in each of the four cells and nothing anywhere else")
+  end
+end
+
+-- The same again at a size that needs no shuffling, as a control.
+loadUp(M("cobbled_deepslate"), 16)
+if polished then
+  local small = inv.stageOnly(craft.cells(polished), 4)
+  ok(small, "and a small batch stages too")
+end
+
+for i = 1, 16 do mock.T.slots[i] = nil end
+
+--[[--------------------------------------------------------------------------
   3. Band splitting -- must tile with no gap and no overlap
 ----------------------------------------------------------------------------]]
 

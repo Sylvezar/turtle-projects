@@ -268,17 +268,23 @@ function turtle.getItemDetail(n)
   return { name = s.name, count = s.count }
 end
 
+--- Note the return value: the real turtle reports FAILURE when it could not
+--- move everything asked for, even though it moved what it could. Code that
+--- treats that as "nothing happened" gets the inventory wrong, so the mock
+--- behaves the same way and the tests can catch it.
 function turtle.transferTo(dst, n)
   local src = T.selected
   if src == dst then return true end
   local s = T.slots[src]
   if not s then return false end
-  n = math.min(n or s.count, s.count)
+
+  local want = math.min(n or s.count, s.count)
   local d = T.slots[dst]
   if d and d.name ~= s.name then return false end
-  local moved = addToSlot(dst, s.name, n)
+
+  local moved = addToSlot(dst, s.name, want)
   takeFromSlot(src, moved)
-  return moved > 0
+  return moved >= want
 end
 
 local function suck(side, count)

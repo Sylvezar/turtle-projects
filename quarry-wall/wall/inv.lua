@@ -185,10 +185,16 @@ function inv.stageOnly(cellList, steps)
                               #held > 0 and table.concat(held, " ") or "nothing")
       end
 
+      -- turtle.transferTo() reports failure when it could not move the WHOLE
+      -- stack, even though it moved what fitted. Judging by the return value
+      -- gives up on a transfer that was making progress, so check the slot.
+      local before = turtle.getItemCount(s)
       turtle.select(s)
-      if not turtle.transferTo(dest) then
-        return false, ("could not move %s from slot %d to %d")
-                      :format(tostring(inv.nameAt(s)), s, dest)
+      turtle.transferTo(dest)
+
+      if turtle.getItemCount(s) >= before then
+        return false, ("could not move %s out of slot %d -- slot %d would not "
+                    .. "take any"):format(tostring(inv.nameAt(s)), s, dest)
       end
     end
   end
