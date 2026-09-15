@@ -79,10 +79,16 @@ end
 --- Split `courses` into `turtles` contiguous bands and return the one `index`
 --- owns, as an inclusive range. Flooring both ends makes the bands tile with
 --- no gap and no overlap even when the division is uneven.
+--- Flooring both ends makes the runs tile with no gap and no overlap even when
+--- the division is uneven. Courses are split this way when building by course,
+--- ring cells when building by column.
+local function splitRun(total, parts, index)
+  return math.floor((index - 1) * total / parts) + 1,
+         math.floor(index * total / parts)
+end
+
 function build.band(courses, turtles, index)
-  local lo = math.floor((index - 1) * courses / turtles) + 1
-  local hi = math.floor(index * courses / turtles)
-  return lo, hi
+  return splitRun(courses, turtles, index)
 end
 
 --[[--------------------------------------------------------------------------
@@ -637,22 +643,9 @@ end
   loadKit -- carry a little of every block a patrol might need.
 ----------------------------------------------------------------------------]]
 function build.loadKit(cfg, types, perType)
-  if not nav.goHome() then return false, "could not get back to the station" end
-
-  local ok, err = build.refuel(cfg)
-  if not ok then return false, err end
-
-  local cleared, cerr = build.park(cfg)
-  if not cleared then return false, cerr end
-
-  for _, block in ipairs(types) do
-    local stocked, serr = build.stockUp(cfg, block, perType)
-    if not stocked then return false, serr end
-  end
-
   local wants = {}
   for _, block in ipairs(types) do wants[block] = perType end
-  return build.collectMany(cfg, wants)
+  return build.loadExactly(cfg, wants)
 end
 
 --[[--------------------------------------------------------------------------
@@ -947,14 +940,413 @@ local function lookoutFor(cells, indexOf, c)
   return nil
 end
 
-function build.patrol(cfg, cells, layers, from, to)
+--[[--------------------------------------------------------------------------
+  BUILDING BY COLUMNS
+
+  The other way round from `build.run`: a turtle takes a stretch of the ring
+  and builds every course of it, rather than taking a stretch of the courses
+  and building every cell of each.
+
+  It is the better arrangement, and the reason is restocking. Laying courses,
+  the wall goes up one block at a time and the turtle has to fly the whole
+  height of its band down to the chests and back every time it runs dry --
+  pure overhead, hundreds of moves a load. Laying columns, the climb IS the
+  work: every move up puts a block in the wall. And because the turtle
+  serpentines -- up one column, over one, down the next -- it is back at the
+  bottom after an EVEN number of columns, standing on the chests exactly when
+  it needs them. Loads are sized to an even number of columns for that reason,
+  even at the cost of carrying less.
+
+  It also disposes of the whole awkward business of placing from above. A
+  course-laying turtle hovers over the cell and places down, which means it
+  needs the space above the wall to be empty -- and it is not, once the course
+  above it exists. Everything here places sideways out of the open pit
+  instead, where there is never anything in the way.
+
+  The price is the crafting. A column spans the entire pattern, so a load has
+  to hold every block type in it and each one is a separate batch. That turns
+  out to be cheap: the overflow chest is directly under the turtle, so parking
+  one batch to start the next costs no movement at all.
+----------------------------------------------------------------------------]]
+
+--- What one full-height column of the wall consumes, as { [block] = count }.
+--- Every column is identical, so this is the unit everything else is sized in.
+function build.columnNeeds(layers, courses)
+  local needs = {}
+  for c = 1, courses do
+    needs[layers[c]] = (needs[layers[c]] or 0) + 1
+  end
+  return needs
+end
+
+--- Block names in a fixed order. `pairs` order varies between runs, and the
+--- order decides which batch is crafted first, so pin it down.
+local function sortedNames(t)
+  local names = {}
+  for name in pairs(t) do names[#names + 1] = name end
+  table.sort(names)
+  return names
+end
+
+-- Slots the material may occupy. Two of the sixteen are held back: one for the
+-- coal a mid-run refuel pulls in, one for collectMany to suck into.
+local SLOT_BUDGET = 14
+
+local function slotsFor(needs, k)
+  local n = 0
+  for _, count in pairs(needs) do n = n + math.ceil(count * k / 64) end
+  return n
+end
+
+--[[--------------------------------------------------------------------------
+  How many whole columns to carry at a time.
+
+  Even, so the serpentine finishes at the bottom where the chests are. That is
+  the entire point of the arrangement and it is worth giving up a column of
+  capacity to keep: an odd load strands the turtle at the top of the wall with
+  an empty inventory and a full-height descent in front of it.
+----------------------------------------------------------------------------]]
+function build.columnsPerLoad(cfg, needs)
+  local fixed = cfg.build.columnsPerLoad or 0
+  if fixed > 0 then return fixed end
+
+  local perColumn = 0
+  for _, count in pairs(needs) do perColumn = perColumn + count end
+  if perColumn == 0 then return 2 end
+
+  local cap  = cfg.build.maxCarryCrafted or 256
+  local best = 0
+
+  for k = 2, 64, 2 do
+    if perColumn * k > cap then break end
+    if slotsFor(needs, k) > SLOT_BUDGET then break end
+    best = k
+  end
+
+  -- A wall tall enough that a single column will not fit in the turtle at all.
+  -- It still works, it just has to come down mid-column as the old builder did.
+  if best == 0 then return 1 end
+  return best
+end
+
+--[[--------------------------------------------------------------------------
+  loadExactly -- come home, make everything in `wants`, and carry it away.
+
+  Crafting needs the turtle completely empty, so each type is made in turn and
+  parked in the overflow, and the whole lot collected at the end.
+----------------------------------------------------------------------------]]
+function build.loadExactly(cfg, wants)
+  if not nav.goHome() then return false, "could not get back to the station" end
+
+  local ok, err = build.refuel(cfg)
+  if not ok then return false, err end
+
+  local cleared, cerr = build.park(cfg)
+  if not cleared then return false, cerr end
+
+  for _, name in ipairs(sortedNames(wants)) do
+    local stocked, serr = build.stockUp(cfg, name, wants[name])
+    if not stocked then return false, serr end
+  end
+
+  return build.collectMany(cfg, wants)
+end
+
+--- Enough for `k` whole columns.
+function build.loadColumns(cfg, needs, k)
+  local wants = {}
+  for name, count in pairs(needs) do wants[name] = count * k end
+  return build.loadExactly(cfg, wants)
+end
+
+--[[--------------------------------------------------------------------------
+  The order the columns are built in, and which way up each one is built.
+
+  Corners come first, and always upwards. A corner has no interior neighbour to
+  stand beside -- that is what makes it a corner -- so the only way to fill one
+  is to ride up inside the column itself, laying each block into the space just
+  vacated. That cannot be done downwards, and the topmost course has no room
+  above it for the trick at all, so it is reached sideways from a neighbouring
+  ring cell instead. Which only works while that neighbour is still open air:
+  hence first.
+
+  Everything after that alternates, so the turtle ends each pair of columns
+  back at the bottom.
+----------------------------------------------------------------------------]]
+function build.columnOrder(cells, indexOf, lo, hi)
+  local corners, rest = {}, {}
+
+  for i = lo, hi do
+    if lookoutFor(cells, indexOf, cells[i]) then
+      rest[#rest + 1] = i
+    else
+      corners[#corners + 1] = i
+    end
+  end
+
+  local order = {}
+  for _, i in ipairs(corners) do
+    order[#order + 1] = { cell = i, up = true, corner = true }
+  end
+
+  local up = true
+  for _, i in ipairs(rest) do
+    order[#order + 1] = { cell = i, up = up }
+    up = not up
+  end
+
+  return order
+end
+
+--- Which cells of the ring this turtle owns.
+function build.arc(ringCount, turtles, index)
+  return splitRun(ringCount, turtles, index)
+end
+
+local function verticalHoleHeader(cfg, meta, lo, hi, perLayer)
+  local f = fs.open(HOLES_FILE, "w")
+  if not f then return end
+  f.writeLine(("wall holes -- turtle %d of %d, ring cells %d to %d")
+              :format(meta.turtle, meta.turtles, lo, hi))
+  f.writeLine(("ring: %d cells; cell 1 is the %s anchor, counting the way")
+              :format(perLayer, cfg.ring.anchor))
+  f.writeLine("the turtles walk it. Height is blocks above the marker ring.")
+  f.writeLine("")
+  f.close()
+end
+
+--[[--------------------------------------------------------------------------
+  runVertical -- build every course of ring cells `lo`..`hi`.
+
+  `startAt` and `startCourse` are where a resumed run picks up: a position in
+  the column order, and the course within that column.
+----------------------------------------------------------------------------]]
+function build.runVertical(cfg, cells, layers, courses, lo, hi,
+                           startAt, startCourse, meta)
+  if ring.contains(cells, 0, 0) then
+    return false, "the station is standing on the marker ring -- move it "
+               .. "inside, or the wall will close over the chests"
+  end
+
+  local perLayer = #cells
+  local base     = scan.baseY(cfg)
+  local indexOf  = build.indexMap(cells)
+  local order    = build.columnOrder(cells, indexOf, lo, hi)
+  local needs    = build.columnNeeds(layers, courses)
+  local perLoad  = build.columnsPerLoad(cfg, needs)
+
+  local placed, skipped, missed = 0, 0, 0
+  local blocked   = {}
+  local sinceSave = 0
+
+  if meta.fresh then verticalHoleHeader(cfg, meta, lo, hi, perLayer) end
+
+  local at = startAt or 1
+
+  local function save(course)
+    build.saveState({
+      mode = "vertical",
+      at = at, course = course, cell = order[at] and order[at].cell,
+      from = lo, to = hi,
+      courses = courses, turtles = meta.turtles, turtle = meta.turtle,
+      ringCount = perLayer,
+    })
+  end
+
+  local function status(state, cell, course)
+    return { state = state, mode = "vertical",
+             cell = cell, cells = perLayer,
+             course = course, courses = courses,
+             placed = placed, skipped = skipped, missed = missed,
+             fuel = turtle.getFuelLevel() }
+  end
+
+  --- Do we hold a whole column's worth of every block the pattern uses?
+  local function haveColumn()
+    for name, count in pairs(needs) do
+      if inv.count(name) < count then return false end
+    end
+    return true
+  end
+
+  --- Go and make another load. Only ever called between columns, so the turtle
+  --- is at the bottom of the wall and the trip is a short one.
+  local function reload(cell, course)
+    save(course)
+    report.now(status("restocking", cell, course))
+    print(("  restocking -- %d columns' worth"):format(perLoad))
+    return build.loadColumns(cfg, needs, perLoad)
+  end
+
+  for step = at, #order do
+    at = step
+    local entry = order[step]
+    local c     = cells[entry.cell]
+
+    local first, last, dir
+    if entry.up then first, last, dir = startCourse or 1, courses, 1
+    else first, last, dir = startCourse or courses, 1, -1 end
+    startCourse = nil
+
+    if not haveColumn() then
+      local ok, err = reload(entry.cell, first)
+      if not ok then
+        report.now(status("stopped", entry.cell, first))
+        return false, err
+      end
+    end
+
+    if not fuelToSpare(cfg) then
+      if not nav.goHome() then
+        return false, "could not get back to the station to refuel"
+      end
+      local fine, ferr = build.refuel(cfg)
+      if not fine then return false, ferr end
+    end
+
+    print(("Cell %d/%d  %s")
+          :format(entry.cell, perLayer, entry.up and "up" or "down"))
+    report.now(status("building", entry.cell, first))
+
+    if entry.corner then
+      -- Up inside the column itself, laying each block into the space the
+      -- turtle has just left. placeCell does exactly that with its overhead
+      -- approach, and falls back to reaching in from a neighbouring ring cell
+      -- for the topmost course, where there is no room to hover.
+      for course = first, last, dir do
+        local y     = base + (course - 1)
+        local block = layers[course]
+
+        if inv.count(block) == 0 then
+          local ok, err = reload(entry.cell, course)
+          if not ok then
+            report.now(status("stopped", entry.cell, course))
+            return false, err
+          end
+        end
+
+        local outcome = build.placeCell(cfg, cells, c, y, block, indexOf, nil)
+
+        if outcome == "placed" then
+          placed = placed + 1
+        elseif outcome == "skipped" then
+          skipped = skipped + 1
+          logHole(cfg, "column", course, entry.cell, perLayer, "occupied")
+        else
+          blocked[#blocked + 1] = { cell = entry.cell, course = course }
+        end
+
+        sinceSave = sinceSave + 1
+        if sinceSave >= cfg.build.saveEvery then
+          save(course)
+          sinceSave = 0
+        end
+        report.tick(status("building", entry.cell, course))
+      end
+
+    else
+      local look = lookoutFor(cells, indexOf, c)
+
+      --- Get beside the cell at `course`, facing it.
+      local function beside(course)
+        local y = base + (course - 1)
+        local p = nav.pos()
+        if p.x ~= look.x or p.y ~= y or p.z ~= look.z then
+          if not nav.goTo(look.x, y, look.z) then return false end
+        end
+        nav.turnTo(look.h)
+        return true
+      end
+
+      if not beside(first) then
+        missed = missed + (math.abs(last - first) + 1)
+        logHole(cfg, "column", first, entry.cell, perLayer,
+                "UNREACHABLE -- could not get beside the column")
+      else
+        for course = first, last, dir do
+          local block = layers[course]
+
+          if inv.count(block) == 0 then
+            local ok, err = reload(entry.cell, course)
+            if not ok then
+              report.now(status("stopped", entry.cell, course))
+              return false, err
+            end
+          end
+
+          if not beside(course) then
+            blocked[#blocked + 1] = { cell = entry.cell, course = course }
+          elseif cfg.build.skipOccupied and turtle.detect() then
+            skipped = skipped + 1
+            logHole(cfg, "column", course, entry.cell, perLayer, "occupied")
+          elseif tryPlace(block, turtle.place) then
+            placed = placed + 1
+          else
+            blocked[#blocked + 1] = { cell = entry.cell, course = course }
+          end
+
+          sinceSave = sinceSave + 1
+          if sinceSave >= cfg.build.saveEvery then
+            save(course)
+            sinceSave = 0
+          end
+          report.tick(status("building", entry.cell, course))
+        end
+      end
+    end
+  end
+
+  --[[------------------------------------------------------------------------
+    Second go at whatever would not take a block. The pit is dark and a mob
+    standing in a cell is not a block: it reads as empty and simply refuses
+    the placement. Only what fails twice, a long while apart, is a real hole.
+  --------------------------------------------------------------------------]]
+  if #blocked > 0 then
+    print(("%d cells were blocked; trying again"):format(#blocked))
+    report.now(status("building", blocked[1].cell, blocked[1].course))
+
+    for _, b in ipairs(blocked) do
+      local c     = cells[b.cell]
+      local y     = base + (b.course - 1)
+      local block = layers[b.course]
+
+      if inv.count(block) == 0 then
+        local ok = build.loadColumns(cfg, needs, perLoad)
+        if not ok then break end
+      end
+
+      local outcome = build.placeCell(cfg, cells, c, y, block, indexOf, nil)
+      if outcome == "placed" then
+        placed = placed + 1
+      elseif outcome == "skipped" then
+        skipped = skipped + 1
+        logHole(cfg, "column", b.course, b.cell, perLayer, "occupied")
+      else
+        missed = missed + 1
+        logHole(cfg, "column", b.course, b.cell, perLayer, "UNREACHABLE")
+      end
+    end
+  end
+
+  nav.goHome()
+  build.clearState()
+
+  report.now(status("done", hi, courses))
+
+  return true, { placed = placed, skipped = skipped, missed = missed }
+end
+
+--- `cellLo`/`cellHi` narrow it to a stretch of the ring, which is what a
+--- turtle that built by column wants: it owns an arc, not a band of courses.
+function build.patrol(cfg, cells, layers, from, to, cellLo, cellHi)
   local base    = scan.baseY(cfg)
   local indexOf = build.indexMap(cells)
 
   local filled, corners, missed, checked = 0, 0, 0, 0
   local up = true
 
-  for idx, c in ipairs(cells) do
+  for idx = cellLo or 1, cellHi or #cells do
+    local c = cells[idx]
     local look = lookoutFor(cells, indexOf, c)
 
     -- A column can take a while, and the monitor calls a turtle "quiet" after

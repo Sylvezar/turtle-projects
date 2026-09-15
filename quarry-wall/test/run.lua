@@ -920,6 +920,310 @@ ok(longForced < longAdaptive, "knowing up front is still cheaper")
   9b. Patrolling the finished wall
 ----------------------------------------------------------------------------]]
 
+--[[--------------------------------------------------------------------------
+  9c. Building by column
+
+  The other way round: a turtle takes a stretch of the ring and builds it to
+  full height, rather than taking a band of courses and lapping the ring.
+----------------------------------------------------------------------------]]
+
+section("column geometry")
+
+do
+  -- Arcs have to tile the ring exactly, the same way bands tile the courses:
+  -- a gap is a missing strip of wall and an overlap is two turtles fighting
+  -- over the same blocks.
+  for _, n in ipairs({ 1, 2, 3, 5, 7, 8 }) do
+    local covered, overlap = {}, false
+    for i = 1, n do
+      local lo, hi = build.arc(156, n, i)
+      for c = lo, hi do
+        if covered[c] then overlap = true end
+        covered[c] = true
+      end
+    end
+
+    local gaps = 0
+    for c = 1, 156 do if not covered[c] then gaps = gaps + 1 end end
+
+    eq(gaps, 0, ("%d turtles leave no cell unclaimed"):format(n))
+    ok(not overlap, ("%d turtles claim no cell twice"):format(n))
+  end
+end
+
+do
+  local vlayers = pattern.layers(cfg.pattern, 21)
+  local needs   = build.columnNeeds(vlayers, 21)
+
+  local total = 0
+  for _, count in pairs(needs) do total = total + count end
+  eq(total, 21, "a column needs exactly one block per course")
+
+  local kinds = 0
+  for _ in pairs(needs) do kinds = kinds + 1 end
+  ok(kinds > 1, ("a column spans %d block types"):format(kinds))
+
+  -- Even, always: an odd load leaves the turtle at the top of the wall with
+  -- an empty inventory, which is the one thing this arrangement exists to
+  -- avoid.
+  local per = build.columnsPerLoad(cfg, needs)
+  eq(per % 2, 0, ("columnsPerLoad is even (got %d)"):format(per))
+  ok(per * total <= cfg.build.maxCarryCrafted,
+     "a load fits inside maxCarryCrafted")
+
+  -- A wall too tall to carry a whole column of has to fall back to 1 rather
+  -- than to 0, or the turtle would never load anything at all.
+  local tall = {}
+  for k, v in pairs(needs) do tall[k] = v * 40 end
+  eq(build.columnsPerLoad(cfg, tall), 1,
+     "one column at a time when a column will not fit")
+
+  -- An explicit setting wins outright.
+  local forced = {}
+  for k, v in pairs(cfg.build) do forced[k] = v end
+  forced.columnsPerLoad = 6
+  eq(build.columnsPerLoad({ build = forced }, needs), 6,
+     "config.build.columnsPerLoad overrides the calculation")
+end
+
+mock.reset()
+local vcells = buildQuarry(0, 0)
+station(SX, SZ, 0)
+
+local vring = ring.survey(cfg.ring)
+ok(vring ~= nil, "traced the ring for a column build")
+
+if vring then
+  local vIndex = build.indexMap(vring)
+  local order  = build.columnOrder(vring, vIndex, 1, #vring)
+
+  eq(#order, #vring, "every cell of the arc gets a column")
+
+  -- Corners first. A corner can only be reached from a neighbouring ring
+  -- cell, so it has to be built while that neighbour is still open air.
+  local sawPlain, cornersLate = false, 0
+  for _, e in ipairs(order) do
+    if e.corner then
+      if sawPlain then cornersLate = cornersLate + 1 end
+    else
+      sawPlain = true
+    end
+  end
+  eq(cornersLate, 0, "corners are built before any ordinary column")
+
+  local corners = 0
+  for _, e in ipairs(order) do if e.corner then corners = corners + 1 end end
+  eq(corners, 4, "a rectangular ring has four corners")
+
+  for _, e in ipairs(order) do
+    if e.corner then ok(e.up, "corner columns are always built upwards") end
+  end
+
+  -- The serpentine: ordinary columns alternate, so the turtle is back at the
+  -- bottom after every pair of them.
+  local alternates = true
+  local last = nil
+  for _, e in ipairs(order) do
+    if not e.corner then
+      if last ~= nil and e.up == last then alternates = false end
+      last = e.up
+    end
+  end
+  ok(alternates, "ordinary columns alternate up and down")
+end
+
+
+section("building by column")
+
+local VCOURSES = 8
+
+mock.reset()
+buildQuarry(0, 0)
+station(SX, SZ, 0)
+
+local vcells2 = ring.survey(cfg.ring)
+local vlayers2 = pattern.layers(cfg.pattern, VCOURSES)
+local vbase = scan.baseY(cfg)
+
+local vbefore = mock.T.moves
+local vok, vres = build.runVertical(cfg, vcells2, vlayers2, VCOURSES,
+                                    1, #vcells2, 1, nil,
+                                    { courses = VCOURSES, turtles = 1,
+                                      turtle = 1, fresh = true })
+local vmoves = mock.T.moves - vbefore
+
+ok(vok, "a column build runs to completion: " .. tostring(vres))
+
+if vok then
+  eq(vres.placed, #vcells2 * VCOURSES,
+     "every cell of every course was placed")
+  eq(vres.missed, 0, "nothing was left unreachable")
+
+  -- And the right block in the right place, which is the thing that would
+  -- quietly go wrong if the course numbering were off by one anywhere.
+  local wrong = 0
+  for course = 1, VCOURSES do
+    local wy = 1 + vbase + (course - 1)
+    for _, c in ipairs(vcells2) do
+      if mock.getBlock(c.x + SX, wy, c.z + SZ) ~= vlayers2[course] then
+        wrong = wrong + 1
+      end
+    end
+  end
+  eq(wrong, 0, "every block laid is the one the pattern asks for")
+
+  ok(mock.T.x == SX and mock.T.z == SZ,
+     "the turtle came home when it had finished")
+end
+
+--[[--------------------------------------------------------------------------
+  The point of the whole exercise: the same wall, both ways round, counting
+  moves. Vertical should win, and win because it is not spending its life
+  flying up and down to the chests.
+----------------------------------------------------------------------------]]
+
+mock.reset()
+buildQuarry(0, 0)
+station(SX, SZ, 0)
+
+local hcells = ring.survey(cfg.ring)
+local hbefore = mock.T.moves
+local hok = build.run(cfg, hcells, vlayers2, 1, VCOURSES, 1,
+                      { courses = VCOURSES, turtles = 1, turtle = 1,
+                        fresh = true })
+local hmoves = mock.T.moves - hbefore
+
+ok(hok, "the course builder still runs")
+
+if vok and hok then
+  print(("  %d blocks: %d moves by column, %d moves by course")
+        :format(#vcells2 * VCOURSES, vmoves, hmoves))
+  print(("  %.2f vs %.2f moves per block")
+        :format(vmoves / (#vcells2 * VCOURSES), hmoves / (#vcells2 * VCOURSES)))
+
+  ok(vmoves < hmoves,
+     ("building by column costs fewer moves (%d vs %d)"):format(vmoves, hmoves))
+end
+
+--[[--------------------------------------------------------------------------
+  Picking up where it stopped.
+
+  A resume that lands in the wrong place does not fail, it builds the wrong
+  wall -- and leaves a strip of pit open somewhere behind it that nobody
+  notices until the whole run is finished. So check the boundary exactly:
+  everything before the restart point untouched, the restarted column started
+  part way up, everything after it complete.
+----------------------------------------------------------------------------]]
+
+do
+  local RC = 4
+  mock.reset()
+  buildQuarry(0, 0)
+  station(SX, SZ, 0)
+
+  local rcells  = ring.survey(cfg.ring)
+  local rlayers = pattern.layers(cfg.pattern, RC)
+  local rorder  = build.columnOrder(rcells, build.indexMap(rcells), 1, #rcells)
+
+  local AT, COURSE = 3, 2
+
+  local rok = build.runVertical(cfg, rcells, rlayers, RC, 1, #rcells,
+                                AT, COURSE,
+                                { courses = RC, turtles = 1, turtle = 1,
+                                  fresh = true })
+  ok(rok, "a resumed column build runs")
+
+  local function blockAt(cell, course)
+    local c = rcells[cell]
+    return mock.getBlock(c.x + SX, 1 + scan.baseY(cfg) + (course - 1), c.z + SZ)
+  end
+
+  local early = 0
+  for step = 1, AT - 1 do
+    for course = 1, RC do
+      if blockAt(rorder[step].cell, course) then early = early + 1 end
+    end
+  end
+  eq(early, 0, "columns before the restart point were left alone")
+
+  ok(blockAt(rorder[AT].cell, COURSE - 1) == nil,
+     "the restarted column skips what was already done")
+  for course = COURSE, RC do
+    ok(blockAt(rorder[AT].cell, course) ~= nil,
+       ("the restarted column is built from course %d up"):format(COURSE))
+  end
+
+  local late = 0
+  for step = AT + 1, #rorder do
+    for course = 1, RC do
+      if not blockAt(rorder[step].cell, course) then late = late + 1 end
+    end
+  end
+  eq(late, 0, "every column after the restart point is complete")
+end
+
+do
+  -- The resume file has to say which way the job was split, or `wall resume`
+  -- carries on with the wrong builder entirely.
+  build.saveState({ mode = "vertical", at = 7, course = 40, cell = 12,
+                    from = 1, to = 20, courses = 118, turtles = 8,
+                    turtle = 2, ringCount = 162 })
+  local s = build.loadState()
+  eq(s.mode, "vertical", "the saved run records the mode")
+  eq(s.at, 7, "and the position in the column order")
+  eq(s.course, 40, "and how far up that column it had got")
+  build.clearState()
+end
+
+--[[--------------------------------------------------------------------------
+  And the reason it wins, which matters more than the margin: what a course
+  builder wastes is the flight down to the chests and back, and that flight
+  gets longer the taller the wall is. So the gap has to WIDEN with height. If
+  it did not, the saving would be coming from somewhere incidental and would
+  not survive the jump from this toy pit to a real one.
+----------------------------------------------------------------------------]]
+
+--- Build `n` courses both ways round, and return the two move counts.
+local function bothWays(n)
+  local layers = pattern.layers(cfg.pattern, n)
+  local meta   = { courses = n, turtles = 1, turtle = 1, fresh = true }
+
+  mock.reset()
+  buildQuarry(0, 0)
+  station(SX, SZ, 0)
+  local cellsV = ring.survey(cfg.ring)
+  local v0 = mock.T.moves
+  build.runVertical(cfg, cellsV, layers, n, 1, #cellsV, 1, nil, meta)
+  local v = mock.T.moves - v0
+
+  mock.reset()
+  buildQuarry(0, 0)
+  station(SX, SZ, 0)
+  local cellsH = ring.survey(cfg.ring)
+  local h0 = mock.T.moves
+  build.run(cfg, cellsH, layers, 1, n, 1, meta)
+  local h = mock.T.moves - h0
+
+  return v, h
+end
+
+do
+  local shortV, shortH = bothWays(6)
+  local tallV,  tallH  = bothWays(20)
+
+  local shortGain = shortH / shortV
+  local tallGain  = tallH / tallV
+
+  print(("   6 courses: %d by column, %d by course  (%.2fx)")
+        :format(shortV, shortH, shortGain))
+  print(("  20 courses: %d by column, %d by course  (%.2fx)")
+        :format(tallV, tallH, tallGain))
+
+  ok(tallGain > shortGain,
+     ("the advantage grows with height (%.2fx at 6 courses, %.2fx at 20)")
+     :format(shortGain, tallGain))
+end
+
 section("patrol")
 
 mock.reset()
@@ -1390,6 +1694,30 @@ if chunk then
       end
     end
     eq(placedCells, #cliRing * 3, "and placed the whole three course wall")
+  end
+
+  -- The other way round, through the same front end. Both builders have to
+  -- stay reachable from the command line: the flag is the quickest thing to
+  -- reach for when a pit is giving the column builder trouble.
+  mock.reset()
+  local cliRing2 = buildQuarry(0, 0)
+  station(SX, SZ, 0)
+
+  local builtH, berrH = pcall(chunk, "build", "1", "1", "3", "-y",
+                              "--horizontal")
+  ok(builtH, "wall build --horizontal runs end to end: " .. tostring(berrH))
+
+  if builtH then
+    local base = scan.baseY(cfg)
+    local placedH = 0
+    for course = 1, 3 do
+      for _, c in ipairs(cliRing2) do
+        if mock.getBlock(c.x, 1 + base + (course - 1), c.z) then
+          placedH = placedH + 1
+        end
+      end
+    end
+    eq(placedH, #cliRing2 * 3, "and placed the same wall by course")
   end
 
   -- With no modem, join must bow out cleanly. A crash here reads as a Lua

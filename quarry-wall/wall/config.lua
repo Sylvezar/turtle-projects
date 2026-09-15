@@ -17,7 +17,7 @@ local config = {}
   -- which is exactly how eight turtles ended up without an overflow chest
   configured and died on their first craft.
 ----------------------------------------------------------------------------]]
-config.version = 3
+config.version = 4
 
 --[[--------------------------------------------------------------------------
   THE PATTERN
@@ -206,17 +206,40 @@ config.height = {
 --[[--------------------------------------------------------------------------
   BUILD BEHAVIOUR
 
-  maxCarryCrafted  blocks per trip when the course needs crafting. Capped by
-                   the 7 turtle slots that are not part of the crafting grid.
+  mode             "vertical" splits the RING between the turtles: each takes
+                   a stretch of the perimeter and builds it full height,
+                   serpentining up one column and down the next. Every move up
+                   lays a block, and the turtle comes back down to the chests
+                   with an empty inventory, so almost nothing is spent just
+                   travelling.
+
+                   "horizontal" splits the COURSES instead: each turtle takes a
+                   band of heights and laps the ring once per course. It is the
+                   older arrangement and it works, but it pays a full-height
+                   round trip to the chests every time it runs dry, and it has
+                   to place downwards, which fights with the course above.
+
+                   Prefer "vertical". "horizontal" is worth trying if the pit
+                   is full of floating leftovers: laying a course routes around
+                   obstacles in two dimensions with room to spare, while a
+                   column has to thread a one-wide gap beside the wall.
+
+  columnsPerLoad   "vertical" only. 0 works it out: the largest EVEN number of
+                   columns that fits, even being what puts the turtle back at
+                   the bottom, beside the chests, exactly as it runs out.
+  maxCarryCrafted  blocks per trip when crafting is needed. Also the ceiling on
+                   an automatic columnsPerLoad.
   maxCarryRaw      blocks per trip for plain cobbled deepslate (no grid
                    needed, so all 16 slots are usable).
-  carryAcross      let one load cover several courses when they are the same
-                   block. Saves a lot of climbing on a deep pit.
+  carryAcross      "horizontal" only: let one load cover several courses when
+                   they are the same block.
   skipOccupied     leave any block already standing in a wall cell alone.
                    Keep this true; it is what protects your existing builds.
   saveEvery        write the resume file every N placed blocks.
 ----------------------------------------------------------------------------]]
 config.build = {
+  mode            = "vertical",
+  columnsPerLoad  = 0,
   maxCarryCrafted = 256,
   maxCarryRaw     = 1024,
   carryAcross     = true,

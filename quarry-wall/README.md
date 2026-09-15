@@ -9,9 +9,10 @@ the wall follows whatever shape you mark, which need not be a rectangle.
 **Nothing is ever broken.** Anything already standing, including floating
 builds and cables crossing the wall line, is detected and left alone.
 
-The work splits across as many turtles as you like. One walks the ring; the
-rest work out where it is from a second, small ring round the launch pad. No
-GPS, no shared coordinates, no per-turtle configuration.
+The work splits across as many turtles as you like — each takes a stretch of
+the perimeter and builds it top to bottom. One walks the ring; the rest work out
+where it is from a second, small ring round the launch pad. No GPS, no shared
+coordinates, no per-turtle configuration.
 
 Built for **Minecraft 1.21.1 / NeoForge**.
 
@@ -160,7 +161,13 @@ wall/wall resume [-y]              carry on from an interrupted run.
 wall/wall patrol [n] [i] [courses] go back over the wall and fill gaps.
 wall/wall seal [courses]           fill the gap under the wall base.
 wall/wall clear                    show what it holds and put it away.
+
+  --vertical / --horizontal        override config.build.mode for one run.
+  -y                               do not ask before starting.
 ```
+
+`check` prints which way the job will be split, so you can see the mode without
+starting anything.
 
 ### A normal launch
 
@@ -210,26 +217,28 @@ Courses to build [122]:
 ```
 wall monitor -- 8 turtles    4 holes
 --------------------------------------------------
- #  band      doing            done  skip miss
- 1  1-15      done             2430     0    0
- 2  16-30     c18 67/162       1580     2    0
- 3  31-45     restock c31      1204     1    0
- 4  46-61     quiet             890     0    0
+ #  slice     doing            done  skip miss
+ 1  1-20      done             2440     0    0
+ 2  21-40     cell 34 c87      1580     2    0
+ 3  41-60     restock c1       1204     1    0
+ 4  61-81     quiet             890     0    0
 --------------------------------------------------
-coverage 1-122 complete
+coverage 1-162 complete
 ```
 
-`coverage … complete` is the check that the bands tiled. Every turtle's holes
-collect into one `wall_holes.txt` on the computer.
+The slice is a stretch of the ring when building by column and a band of
+courses when building by course; `coverage … complete` is the check that the
+slices tiled, either way. Every turtle's holes collect into one
+`wall_holes.txt` on the computer.
 
 A turtle restarted by hand with `build` or `resume` never goes through the
 lobby, but the monitor picks it up as soon as it reports.
 
 ### Finishing up
 
-A course is built in one pass, so anything in the way at that moment — a mob
+The wall is built in one pass, so anything in the way at that moment — a mob
 standing in the cell, another turtle, a cable — leaves a hole. Two passes clean
-that up, run on each turtle once its band is done:
+that up, run on each turtle once its slice is done:
 
 ```
 wall/wall patrol      go back over the wall and fill what is missing
@@ -237,8 +246,9 @@ wall/wall seal        close the gap under the wall base
 ```
 
 `patrol` flies up the column just *inside* each wall cell and looks sideways,
-carrying a stack of every block its band uses. With no arguments it reads its
-own band from the saved run, so it needs no telling.
+carrying a stack of every block it might need. With no arguments it reads its
+own slice from the saved run, so it needs no telling — and it checks the same
+slice it built, whichever way the job was split.
 
 It skips corners. A corner has no interior cell to fly up beside, so there is
 nowhere to look from — and you cannot see a corner from inside the pit anyway.
@@ -261,8 +271,8 @@ wall/wall resume -y            carry on from wherever it stopped
 turtle it is rather than needing to be told:
 
 ```
-Resuming turtle 4 of 8, courses 46 to 61.
-Stopped at course 52, cell 88.
+Resuming turtle 4 of 8, ring cells 61 to 81.
+Stopped on cell 68 at course 94.
 ```
 
 ---
@@ -367,6 +377,12 @@ For a 40 × 40 pit, 122 courses, across 8 turtles:
 Everything in the default pattern is 1:1 from cobbled deepslate, so blocks and
 cobbled deepslate are the same number.
 
+The runtime is for the default column mode. On the test pit the same wall costs
+**1.15× more moves** by course at 6 courses and **1.35× more** at 20 — the gap
+widens with height, because what a course builder wastes is the flight down to
+the chests and back, and that flight gets longer the taller the wall is. At 122
+courses it is the dominant cost.
+
 **Chunk loading is what will actually bite you.** An hour is far longer than you
 will stand there, and a turtle stops dead when its chunk unloads:
 
@@ -401,14 +417,33 @@ turtle's own frame, so a turtle back on its station reuses it after a short hop
 to confirm the froglight is still where the list says — a few blocks, rather
 than a lap of the perimeter.
 
-**Splitting the work.** Courses divide into contiguous bands, one per turtle,
-flooring both ends so they tile with no gap or overlap. Turtles stay tens of
-courses apart.
+**Splitting the work.** The ring divides into contiguous arcs, one per turtle,
+flooring both ends so they tile with no gap or overlap. Each turtle builds its
+stretch of the perimeter to full height.
 
-**Building.** Bottom-up, one course at a time, flying one level *above* the
-course and placing downwards. If the space above a cell is occupied it stands
-beside the cell and places sideways instead — which is how a wall gets threaded
-past an obstruction without breaking it.
+**Building.** By column, serpentining — up one column, over one, down the next
+— standing in the open pit beside the wall and placing sideways. Two things
+follow from that, and they are the whole reason for it:
+
+- **The climb is the work.** Every move up lays a block. A course-laying turtle
+  has to fly the full height of its band down to the chests and back every time
+  it runs dry, which buys nothing.
+- **It runs out at the bottom.** A serpentine is back where it started after an
+  *even* number of columns, so loads are sized to an even number of them. The
+  turtle lands on the chests exactly as the last block leaves its inventory.
+
+Corners are the exception: a corner has no interior cell to stand beside, so
+the turtle rides up *inside* the column, laying each block into the space it has
+just left. That only works upwards, and the topmost course has no room above it
+for the trick at all — it is reached sideways from a neighbouring ring cell
+instead, which is why corners are built before their neighbours are.
+
+The older arrangement — each turtle takes a band of *courses* and laps the ring
+once per course, placing downwards from above — is still there as
+`config.build.mode = "horizontal"` or `--horizontal`. It is worth a try on a pit
+full of floating leftovers: laying a course routes around an obstacle in two
+dimensions with room to spare, while a column has to thread a one-wide gap
+beside the wall.
 
 **Crafting.** `turtle.craft()` matches against the **whole inventory**, so the
 turtle must hold the recipe and nothing else. Everything goes into the overflow
@@ -416,6 +451,11 @@ chest first, and batches are *planned* so every stage of a chain divides
 exactly, leaving no remainder to spoil the next craft. Blocks already sitting in
 the overflow are counted before anything is crafted, so the pattern coming back
 round to a type built earlier costs nothing.
+
+Building by column means a load spans the whole pattern rather than one course,
+so every block type in it is a separate batch. That turns out to cost almost
+nothing: the overflow chest is directly under the turtle, so parking one batch
+to start the next involves no movement at all.
 
 **Nothing is ever dug.** There is no `turtle.dig()` call anywhere. Occupied cells
 are skipped, counted, and written to `wall_holes.txt` with a course number and a
@@ -429,10 +469,14 @@ cell index counted from the anchor.
   refuses rather than guessing.
 - **The supply chest must hold only cobbled deepslate.**
 - **The station must be inside the wall ring**, not on it.
-- **Every turtle needs the same course count.** The monitor handles this; if you
-  use `build` by hand, give them all the same number.
+- **Every turtle needs the same course count**, and the same mode. The monitor
+  handles the count; if you use `build` by hand, give them all the same number.
 - Corners blocked from above and from both sides cannot be filled and are
   reported as `UNREACHABLE`.
+- **Building by column wants a clear pit.** The turtle climbs a one-wide gap
+  beside the wall it is laying. Something floating right against the wall line
+  can cut a column in half, and everything above the obstruction gets logged as
+  a hole. `--horizontal` has far more room to detour if that happens.
 
 ---
 

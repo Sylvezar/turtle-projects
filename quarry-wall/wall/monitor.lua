@@ -273,8 +273,27 @@ end
 
 --[[-- coverage ------------------------------------------------------------]]
 
+--[[--------------------------------------------------------------------------
+  Do the turtles between them cover the whole job?
+
+  What a slice is depends on how the job was split. Building by course, a
+  turtle owns a band of heights and the slices have to tile 1..courses.
+  Building by column it owns a stretch of the ring, and they have to tile
+  1..ring cells instead. Either way an overlap means two turtles are about to
+  fight over the same blocks, which is worth shouting about.
+----------------------------------------------------------------------------]]
 local function coverage()
-  if not courses then return "waiting for turtles", false end
+  local vertical, total, unit = false, courses, "course"
+
+  for _, t in pairs(seen) do
+    if t.mode == "vertical" then
+      vertical = true
+      total = t.cells or total
+    end
+  end
+  if vertical then unit = "cell" end
+
+  if not total then return "waiting for turtles", false end
 
   local claimed = {}
   for _, t in pairs(seen) do
@@ -284,17 +303,18 @@ local function coverage()
   end
 
   local gap, dup
-  for c = 1, courses do
+  for c = 1, total do
     local n = claimed[c] or 0
     if n == 0 and not gap then gap = c end
     if n > 1 and not dup then dup = c end
   end
 
   if dup then
-    return ("OVERLAP at course %d -- two turtles share a slice"):format(dup), true
+    return ("OVERLAP at %s %d -- two turtles share a slice"):format(unit, dup),
+           true
   end
-  if gap then return ("unclaimed from course %d"):format(gap), false end
-  return ("coverage 1-%d complete"):format(courses), false
+  if gap then return ("unclaimed from %s %d"):format(unit, gap), false end
+  return ("coverage 1-%d complete"):format(total), false
 end
 
 --[[-- drawing -------------------------------------------------------------]]
@@ -379,7 +399,9 @@ end
 
 local function drawWatch()
   header(("%d turtles    %d holes"):format(#waiting, #holes))
-  print(" #  band      doing            done  skip miss")
+  -- "slice", not "band": it is a band of courses when building by course and a
+  -- stretch of the ring when building by column.
+  print(" #  slice     doing            done  skip miss")
 
   local indices = {}
   for i in pairs(seen) do indices[#indices + 1] = i end
@@ -403,6 +425,10 @@ local function drawWatch()
       -- the cell is the useful number and the course is where it is in the
       -- column it happens to be on.
       doing = ("patrol %s/%s"):format(tostring(t.cell), tostring(t.cells))
+    elseif t.mode == "vertical" then
+      -- Same again for a column build: which cell of the ring, and how far up
+      -- that column it has got.
+      doing = ("cell %s c%s"):format(tostring(t.cell), tostring(t.course))
     else doing = ("c%s %s/%s"):format(tostring(t.course), tostring(t.cell),
                                       tostring(t.cells)) end
 

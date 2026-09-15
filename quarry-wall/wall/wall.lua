@@ -70,6 +70,32 @@ local function confirm(question)
 end
 
 --[[--------------------------------------------------------------------------
+  Which way round the job gets split
+
+  config.build.mode decides it; --vertical and --horizontal override it for a
+  single run, which is the quickest way to try the other one on a pit that is
+  giving trouble.
+----------------------------------------------------------------------------]]
+
+local modeOverride = nil
+
+local function buildMode()
+  return modeOverride or (cfg.build and cfg.build.mode) or "vertical"
+end
+
+--- Pull the flags out of a command line, returning what is left of it.
+local function takeFlags(args)
+  local rest, yes = {}, false
+  for _, a in ipairs(args or {}) do
+    if a == "-y" then yes = true
+    elseif a == "--vertical" then modeOverride = "vertical"
+    elseif a == "--horizontal" then modeOverride = "horizontal"
+    else rest[#rest + 1] = a end
+  end
+  return rest, yes
+end
+
+--[[--------------------------------------------------------------------------
   Preflight -- everything checkable without moving a block
 ----------------------------------------------------------------------------]]
 
@@ -170,6 +196,10 @@ function cmd.check()
   print(("Crafting:  %s"):format(
     turtle.craft and "crafting table fitted"
                   or (needsCrafting and "MISSING" or "not needed")))
+  print(("Mode:      %s"):format(
+    buildMode() == "vertical"
+      and "vertical -- each turtle takes a stretch of the ring, full height"
+      or  "horizontal -- each turtle takes a band of courses"))
   print(("Ring:      %s, anchored on %s")
         :format(cfg.ring.block, cfg.ring.anchor))
   print(("Base:      %d above the ring"):format(cfg.wall.aboveRing))
@@ -283,16 +313,37 @@ local function runBuild(turtles, index, courses, yes, known)
     die("fix config.lua and try again")
   end
 
-  local from, to = build.band(courses, turtles, index)
-  if from > to then
-    die(("turtle %d of %d has no courses -- more turtles than courses")
-        :format(index, turtles))
-  end
+  local vertical = buildMode() == "vertical"
+  local from, to
 
-  print("")
-  print(("Turtle %d of %d -- courses %d to %d of %d")
-        :format(index, turtles, from, to, courses))
-  reportBands(layers, from, to, d.count)
+  if vertical then
+    from, to = build.arc(d.count, turtles, index)
+    if from > to then
+      die(("turtle %d of %d has no ring cells -- more turtles than cells")
+          :format(index, turtles))
+    end
+
+    local columns = to - from + 1
+    print("")
+    print(("Turtle %d of %d -- ring cells %d to %d of %d, full height")
+          :format(index, turtles, from, to, d.count))
+    reportBands(layers, 1, courses, columns)
+
+    local needs   = build.columnNeeds(layers, courses)
+    local perLoad = build.columnsPerLoad(cfg, needs)
+    print(("  %d columns, %d per load"):format(columns, perLoad))
+  else
+    from, to = build.band(courses, turtles, index)
+    if from > to then
+      die(("turtle %d of %d has no courses -- more turtles than courses")
+          :format(index, turtles))
+    end
+
+    print("")
+    print(("Turtle %d of %d -- courses %d to %d of %d")
+          :format(index, turtles, from, to, courses))
+    reportBands(layers, from, to, d.count)
+  end
 
   print("")
   if not yes and not confirm("Start?") then
@@ -306,18 +357,21 @@ local function runBuild(turtles, index, courses, yes, known)
 
   local meta = { courses = courses, turtles = turtles,
                  turtle = index, fresh = true }
-  local done, result = build.run(cfg, cells, layers, from, to, 1, meta)
+
+  local done, result
+  if vertical then
+    done, result = build.runVertical(cfg, cells, layers, courses,
+                                     from, to, 1, nil, meta)
+  else
+    done, result = build.run(cfg, cells, layers, from, to, 1, meta)
+  end
   if not done then die(result) end
 
   summarise(result)
 end
 
 function cmd.build(args)
-  local yes = false
-  local rest = {}
-  for _, a in ipairs(args) do
-    if a == "-y" then yes = true else rest[#rest + 1] = a end
-  end
+  local rest, yes = takeFlags(args)
 
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end
@@ -351,7 +405,9 @@ end
   coordinate systems, and translate the scout's big ring into each turtle's own
   numbers without anyone leaving the pad.
 ----------------------------------------------------------------------------]]
-function cmd.join()
+function cmd.join(args)
+  takeFlags(args)
+
   if not report.open(cfg) then
     die("join needs a wireless modem fitted -- use `wall build` instead")
   end
@@ -479,9 +535,17 @@ function cmd.resume(args)
   local s = build.loadState()
   if not s then die("no saved run to resume") end
 
-  print(("Resuming turtle %d of %d, courses %d to %d.")
-        :format(s.turtle, s.turtles, s.from or s.layer, s.to))
-  print(("Stopped at course %d, cell %d."):format(s.layer, s.index))
+  local vertical = s.mode == "vertical"
+
+  if vertical then
+    print(("Resuming turtle %d of %d, ring cells %d to %d.")
+          :format(s.turtle, s.turtles, s.from, s.to))
+    print(("Stopped on cell %s at course %d."):format(tostring(s.cell), s.course))
+  else
+    print(("Resuming turtle %d of %d, courses %d to %d.")
+          :format(s.turtle, s.turtles, s.from or s.layer, s.to))
+    print(("Stopped at course %d, cell %d."):format(s.layer, s.index))
+  end
   print("The turtle must be back at its station, facing the way it started.")
   if not yes and not confirm("Ready?") then return end
 
@@ -529,12 +593,22 @@ function cmd.resume(args)
   if not layers then die(perr) end
 
   report.open(cfg)
-  report.identify({ turtle = s.turtle, turtles = s.turtles,
-                    from = s.layer, to = s.to, courses = s.courses })
 
   local meta = { courses = s.courses, turtles = s.turtles,
                  turtle = s.turtle, fresh = false }
-  local done, result = build.run(cfg, cells, layers, s.layer, s.to, s.index, meta)
+
+  local done, result
+
+  if vertical then
+    report.identify({ turtle = s.turtle, turtles = s.turtles,
+                      from = s.from, to = s.to, courses = s.courses })
+    done, result = build.runVertical(cfg, cells, layers, s.courses,
+                                     s.from, s.to, s.at, s.course, meta)
+  else
+    report.identify({ turtle = s.turtle, turtles = s.turtles,
+                      from = s.layer, to = s.to, courses = s.courses })
+    done, result = build.run(cfg, cells, layers, s.layer, s.to, s.index, meta)
+  end
   if not done then die(result) end
 
   summarise(result)
@@ -548,11 +622,7 @@ end
   it will meet any of them.
 ----------------------------------------------------------------------------]]
 function cmd.patrol(args)
-  local yes = false
-  local rest = {}
-  for _, a in ipairs(args or {}) do
-    if a == "-y" then yes = true else rest[#rest + 1] = a end
-  end
+  local rest, yes = takeFlags(args)
 
   local at, aerr = build.checkStation(cfg)
   if not at then die(aerr) end
@@ -583,8 +653,23 @@ function cmd.patrol(args)
   local layers, perr = pattern.layers(cfg.pattern, courses)
   if not layers then die(perr) end
 
-  local from, to = build.band(courses, turtles, index)
-  if from > to then die("this turtle has no courses to patrol") end
+  -- A turtle that built by column owns a stretch of the ring at every height,
+  -- not a band of courses, so it patrols that stretch instead.
+  local vertical = buildMode() == "vertical"
+  if saved and saved.mode and not modeOverride then
+    vertical = saved.mode == "vertical"
+  end
+
+  local from, to, cellLo, cellHi
+
+  if vertical then
+    from, to = 1, courses
+    cellLo, cellHi = build.arc(#cells, turtles, index)
+    if cellLo > cellHi then die("this turtle has no ring cells to patrol") end
+  else
+    from, to = build.band(courses, turtles, index)
+    if from > to then die("this turtle has no courses to patrol") end
+  end
 
   local kit = {}
   for i = from, to do kit[layers[i]] = true end
@@ -593,8 +678,13 @@ function cmd.patrol(args)
   table.sort(list)
 
   print("")
-  print(("Turtle %d of %d -- checking courses %d to %d of %d")
-        :format(index, turtles, from, to, courses))
+  if vertical then
+    print(("Turtle %d of %d -- checking ring cells %d to %d, all %d courses")
+          :format(index, turtles, cellLo, cellHi, courses))
+  else
+    print(("Turtle %d of %d -- checking courses %d to %d of %d")
+          :format(index, turtles, from, to, courses))
+  end
   print(("Ring: %d cells. Carrying: %d block types.")
         :format(#cells, #list))
   for _, name in ipairs(list) do print("  " .. shortName(name)) end
@@ -617,7 +707,8 @@ function cmd.patrol(args)
 
   report.now({ state = "patrolling", course = from, cell = 0, cells = #cells })
 
-  local done, result = build.patrol(cfg, cells, layers, from, to)
+  local done, result = build.patrol(cfg, cells, layers, from, to,
+                                    cellLo, cellHi)
   if not done then
     report.now({ state = "stopped", error = tostring(result) })
     die(result)
@@ -729,6 +820,9 @@ function cmd.help()
   print("wall seal [courses]           fill the gap under the wall base")
   print("wall patrol [n] [i] [courses] go back over the wall and fill gaps")
   print("wall clear                    show what it holds and put it away")
+  print("")
+  print("  --vertical / --horizontal   override config.build.mode for one run")
+  print("  -y                          do not ask before starting")
 end
 
 --[[--------------------------------------------------------------------------
