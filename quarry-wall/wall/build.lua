@@ -518,8 +518,22 @@ function build.restock(cfg, block, want, stillNeeded)
     -- the chain divides evenly; one block more and the last stage has a
     -- remainder, which is a stray item, which is a refused craft.
     local have = inv.count(craft.RAW)
+
+    if have > plan.raw then
+      -- Put the surplus back rather than refusing to work. The overflow chest
+      -- is directly underneath, so this costs nothing.
+      print(("  %d spare cobbled deepslate, putting it back")
+            :format(have - plan.raw))
+      local shed, serr = build.park(cfg, craft.RAW, plan.raw)
+      if not shed then
+        return 0, serr or "could not put the surplus back"
+      end
+      have = inv.count(craft.RAW)
+    end
+
     if have ~= plan.raw then
-      return 0, ("needed exactly %d cobbled deepslate for this batch, have %d")
+      return 0, ("needed exactly %d cobbled deepslate for this batch, have %d "
+              .. "-- the supply chest may have run dry")
                 :format(plan.raw, have)
     end
 
