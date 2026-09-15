@@ -217,8 +217,79 @@ function ring.canonicalise(cells)
   return out
 end
 
+--[[--------------------------------------------------------------------------
+  The traced ring, kept on disk.
+
+  The cell list is in the turtle's own frame, anchored at the marker block and
+  wound in a fixed direction -- so as long as the turtle is back on its station
+  facing the chests, a list saved earlier is still exactly right. Reusing it
+  turns a full lap of the perimeter into a short hop to confirm the anchor is
+  where the list says.
+
+  That matters most for the things that happen repeatedly: a resume, a restart
+  after a crash, a second run to fill holes. Only the very first trace has to
+  walk the whole ring.
+----------------------------------------------------------------------------]]
+
+local CACHE = "wall_ring.txt"
+
+function ring.clearCache()
+  if fs.exists(CACHE) then fs.delete(CACHE) end
+end
+
+local function saveCache(cfg, cells)
+  local f = fs.open(CACHE, "w")
+  if not f then return end
+  f.write(textutils.serialize({
+    block = cfg.ring.block, anchor = cfg.ring.anchor,
+    count = #cells, cells = cells,
+  }))
+  f.close()
+end
+
+local function loadCache(cfg)
+  if not fs.exists(CACHE) then return nil end
+
+  local f = fs.open(CACHE, "r")
+  local saved = textutils.unserialize(f.readAll())
+  f.close()
+
+  if type(saved) ~= "table" or type(saved.cells) ~= "table" then return nil end
+  if saved.block ~= cfg.ring.block or saved.anchor ~= cfg.ring.anchor then
+    return nil            -- the markers were changed; do not trust it
+  end
+  if #saved.cells ~= saved.count or #saved.cells < 3 then return nil end
+  if cfg.ring.expectCells and #saved.cells ~= cfg.ring.expectCells then
+    return nil
+  end
+
+  return saved.cells
+end
+
+--- Fly to where the list says the anchor is and check it is really there. If
+--- the turtle has moved, or the ring has, this is what notices.
+local function cacheStillGood(cfg, cells)
+  local a = cells[1]
+  if not a then return false end
+  if not nav.goTo(a.x, 0, a.z) then return false end
+  return kindBelow(cfg) == "anchor"
+end
+
 --- Find it, walk it, and hand back the canonical cell list.
 function ring.survey(cfg, strict)
+  -- A saved lap, if there is one and the anchor is still where it says.
+  if not strict and cfg.ring.cache ~= false then
+    local cached = loadCache(cfg)
+    if cached then
+      if cacheStillGood(cfg, cached) then
+        nav.goHome()
+        return cached
+      end
+      ring.clearCache()
+      nav.goHome()
+    end
+  end
+
   local found, err = ring.find(cfg)
   if not found then return nil, err end
 
@@ -240,6 +311,7 @@ function ring.survey(cfg, strict)
               :format(#canon, want)
   end
 
+  saveCache(cfg, canon)
   return canon
 end
 

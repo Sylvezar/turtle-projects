@@ -11,6 +11,15 @@
 local config = {}
 
 --[[--------------------------------------------------------------------------
+  Bumped whenever this file gains a setting the program needs. The installer
+  keeps your edited config rather than overwriting it, so without this a new
+  required setting would simply never arrive on a turtle that already had one
+  -- which is exactly how eight turtles ended up without an overflow chest
+  configured and died on their first craft.
+----------------------------------------------------------------------------]]
+config.version = 2
+
+--[[--------------------------------------------------------------------------
   THE PATTERN
 
   The wall is built from its base upwards. Courses are assigned like so:
@@ -81,6 +90,13 @@ config.ring = {
   -- -- can come back with a short loop, and this is what catches that on a
   -- turtle running without a monitor to cross-check it. nil = no check.
   expectCells = nil,
+
+  -- Remember the traced ring between runs. The cell list is anchored and wound
+  -- the same way every time, so a turtle back on its station can reuse it
+  -- after a short hop to confirm the anchor is still underneath -- instead of
+  -- walking the whole perimeter again on every resume and restart.
+  -- `wall scan` always traces for real and refreshes it.
+  cache = true,
 }
 
 --[[--------------------------------------------------------------------------

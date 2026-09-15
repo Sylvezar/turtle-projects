@@ -60,6 +60,7 @@ local holes     = {}
 local holeSeen  = {}
 
 local courses, stagger        -- chosen at launch time
+local halted                  -- a turtle failed; stop letting more go
 local releasing, releaseTimer -- how far through the launch we are
 local totalCourses
 
@@ -220,7 +221,16 @@ local function drawLaunch()
   local _, h = term.getSize()
   term.setCursorPos(1, h - 1)
   print(string.rep("-", 50))
-  write(("%d of %d released"):format(math.min(releasing - 1, #waiting), #waiting))
+
+  if halted then
+    colour("red")
+    write("HALTED -- turtle " .. tostring(releasing) .. ": "
+          .. tostring((seen[releasing] or {}).error or "stopped"))
+    colour("white")
+  else
+    write(("%d of %d released"):format(math.min(releasing - 1, #waiting),
+                                       #waiting))
+  end
 end
 
 local function drawWatch()
@@ -268,6 +278,20 @@ local function drawWatch()
   term.setCursorPos(1, h - 1)
   print(string.rep("-", 50))
 
+  -- An error outranks the coverage line: it is the thing that needs acting on.
+  local failed
+  for i, t in pairs(seen) do
+    if t.state == "stopped" then failed = failed or { i = i, t = t } end
+  end
+
+  if failed then
+    colour("red")
+    write(("turtle %d STOPPED: %s"):format(failed.i,
+          tostring(failed.t.error or "no reason given")))
+    colour("white")
+    return
+  end
+
   local text, bad = coverage()
   if bad then colour("red") end
   write(text)
@@ -300,7 +324,16 @@ end
 local function maybeAdvance()
   if phase ~= "launch" then return end
   local st = seen[releasing]
-  if st and (st.state == "building" or st.state == "restocking") then
+  if not st then return end
+
+  -- A turtle that has stopped has failed. Releasing the next one on top of
+  -- that just produces eight failures instead of one, and buries the error.
+  if st.state == "stopped" then
+    halted = true
+    return
+  end
+
+  if st.state == "building" or st.state == "restocking" then
     releasing = releasing + 1
     releaseNext()
   end

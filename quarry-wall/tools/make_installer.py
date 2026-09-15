@@ -79,6 +79,12 @@ def main():
     out.append("  edited wall/config.lua alone.")
     out.append("]]")
     out.append("")
+    # The config schema version, read out of the bundled config so the
+    # installer can tell an out-of-date one on the turtle.
+    import re as _re
+    m = _re.search(r"config\.version\s*=\s*(\d+)", contents["wall/config.lua"])
+    out.append(f"local configVersion = {m.group(1) if m else 0}")
+    out.append("")
     out.append("local preserve = {")
     for p in sorted(PRESERVE):
         out.append(f'  ["{p}"] = true,')
@@ -99,6 +105,17 @@ def main():
     out.append(
         r"""
 if not fs.exists("wall") then fs.makeDir("wall") end
+
+--- Is the config already on this turtle old enough to be missing settings the
+--- program now needs?
+local function staleConfig()
+  if not fs.exists("wall/config.lua") then return false end
+  local ok, existing = pcall(dofile, "wall/config.lua")
+  if not ok or type(existing) ~= "table" then return true end
+  return (existing.version or 0) < configVersion
+end
+
+local stale = staleConfig()
 
 local written, kept = 0, 0
 
@@ -121,6 +138,14 @@ end
 
 print("")
 print(written .. " files written, " .. kept .. " kept.")
+
+if stale then
+  print("")
+  printError("Your wall/config.lua is older than this build and is missing")
+  printError("settings the program needs. It was kept so your edits survive.")
+  printError("")
+  printError("  rm wall/config.lua   then install again")
+end
 """.strip()
     )
     out.append(f'print("build {build_id}  ({made})")')
