@@ -261,6 +261,21 @@ so they read `quiet` up high and reappear when they come home to restock. The
 lobby and launch happen at the station, so plain modems are fine for that part.
 Ender modems give continuous status.
 
+### If a turtle stops somewhere it should not be
+
+Position is tracked in memory, so whatever cell a turtle occupies when a
+program starts becomes its origin. Terminate a run out on the ring and restart
+it there, and it would otherwise build a wall offset by however far it had
+wandered.
+
+`build`, `join`, `resume` and `seal` all check for the supply chest before
+placing anything and refuse if it is not there. `scan` does not check and does
+not need to — everything it reports is derived fresh and relative, so scanning
+from halfway round the ring gives the same answer.
+
+To reset one: **break the turtle and place it again** at its station, facing
+the chests. It keeps its ID, files, inventory and fuel level.
+
 ### If a run is interrupted
 
 Chunk unloads, server restarts and running out of fuel all leave a
@@ -306,6 +321,21 @@ One thing worth doing first: if a cable runs *vertically* through the wall
 line, that is not a few scattered holes but a slot dozens of courses tall.
 Cheaper to move that one before starting. Horizontal crossings cost a block or
 two each and are not worth the effort.
+
+### If a turtle stops somewhere it should not be
+
+Position is tracked in memory, so whatever cell a turtle occupies when a
+program starts becomes its origin. Terminate a run out on the ring and restart
+it there, and it would otherwise build a wall offset by however far it had
+wandered.
+
+`build`, `join`, `resume` and `seal` all check for the supply chest before
+placing anything and refuse if it is not there. `scan` does not check and does
+not need to — everything it reports is derived fresh and relative, so scanning
+from halfway round the ring gives the same answer.
+
+To reset one: **break the turtle and place it again** at its station, facing
+the chests. It keeps its ID, files, inventory and fuel level.
 
 ### If a run is interrupted
 

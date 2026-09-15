@@ -282,7 +282,7 @@ function build.checkStation(cfg)
     return false, "no supply chest where one should be -- put the turtle back "
                .. "on its station facing the chests. If it was terminated part "
                .. "way through a run, break it and place it again; it keeps "
-               .. "its files and inventory"
+               .. "its files, inventory and fuel"
   end
 
   return true
