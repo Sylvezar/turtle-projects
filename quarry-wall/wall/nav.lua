@@ -208,10 +208,29 @@ function nav.goTo(tx, ty, tz)
   return false, "no path"
 end
 
-function nav.goHome()
-  local ok, err = nav.goTo(0, 0, 0)
-  if ok then nav.turnTo(0) end
-  return ok, err
+--[[--------------------------------------------------------------------------
+  Going home is the one move that must not fail: everything else can be retried
+  later, but a turtle that cannot get back cannot restock and the run is over.
+
+  With eight turtles sharing a pit, the usual reason is simply that another one
+  is in the way, which stops being true within seconds. So try again rather
+  than giving up the first time.
+----------------------------------------------------------------------------]]
+function nav.goHome(attempts)
+  attempts = attempts or 4
+
+  local ok, err
+  for try = 1, attempts do
+    ok, err = nav.goTo(0, 0, 0)
+    if ok then
+      nav.turnTo(0)
+      return true
+    end
+    if err == "out of fuel" then return false, err end
+    if try < attempts then sleep(3) end
+  end
+
+  return false, err
 end
 
 --[[--------------------------------------------------------------------------

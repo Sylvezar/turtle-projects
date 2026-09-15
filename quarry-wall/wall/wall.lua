@@ -253,14 +253,20 @@ local function runBuild(turtles, index, courses, yes, known)
 
   local cells = known
   if not cells then
-    -- Say so before tracing, not after. Tracing is a full lap of the ring and
-    -- the turtle was previously silent throughout, so the monitor could not
-    -- tell a turtle working from one that had died.
+    -- Confirm the frame against the launch pad ring first: it is a few blocks
+    -- away, and proving the turtle has not moved is all the cached wall ring
+    -- needs. Checking the wall ring's own anchor means crossing the pit.
+    local trust = false
+    if cfg.innerRing then
+      local near = ring.survey(cfg.innerRing)
+      trust = near ~= nil
+    end
+
     report.now({ state = "tracing" })
-    print("Tracing the marker ring...")
+    if not trust then print("Tracing the marker ring...") end
 
     local err
-    cells, err = ring.survey(cfg.ring)
+    cells, err = ring.survey(cfg.ring, { trustFrame = trust })
     if not cells then die(err) end
   end
 
@@ -497,7 +503,12 @@ function cmd.resume(args)
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end
 
-  local cells, err, cached = ring.survey(cfg.ring)
+  local trust = false
+  if cfg.innerRing then
+    trust = ring.survey(cfg.innerRing) ~= nil
+  end
+
+  local cells, err, cached = ring.survey(cfg.ring, { trustFrame = trust })
   if not cells then die(err) end
   if cached then
     print(("Ring: %d cells, remembered from last time."):format(#cells))

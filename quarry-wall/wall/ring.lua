@@ -297,7 +297,11 @@ function ring.survey(spec, opts)
   if not opts.strict and spec.cache ~= false then
     local cached = loadCache(spec)
     if cached then
-      if cacheStillGood(spec, cached) then
+      -- The cached list is in this turtle's own frame, so all that needs
+      -- confirming is that the frame has not moved. The caller can prove that
+      -- with a nearer landmark than this ring's anchor -- the launch pad ring
+      -- is a few blocks away, the wall ring's anchor is across the pit.
+      if opts.trustFrame or cacheStillGood(spec, cached) then
         if opts.onFound then opts.onFound() end
         if not opts.stayOut then nav.goHome() end
         return cached, true          -- second value: came from the cache
