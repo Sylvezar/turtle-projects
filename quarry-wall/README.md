@@ -148,7 +148,7 @@ Needs a server restart to take effect.
 
 ```
 wall/wall check                    check config and turtle. Moves nothing.
-wall/wall scan                     trace the ring and measure. Places nothing.
+wall/wall scan [--strict]          trace the ring and measure. Places nothing.
 wall/wall join                     wait for the monitor to assign a slice.
 wall/wall build [n] [i] [courses]  build a slice given directly.
 wall/wall resume                   carry on from an interrupted run.
@@ -161,9 +161,16 @@ First, on **one** turtle:
 wall/wall scan
 ```
 
-It traces the ring with the strict check (verifying it is one block wide the
-whole way round), measures the height, and prints the course count. Note that
+It traces the ring, measures the height, and prints the course count. Note that
 number — it is the only one you have to type.
+
+The traced loop is checked for shape as a matter of course: every cell must
+have exactly two neighbours in the loop, which catches a two-wide stretch or a
+trace that doubled back. That is pure arithmetic and costs no moves.
+`wall scan --strict` additionally walks into every neighbour of every cell to
+verify the ring itself — correct, but about six moves per cell, so several
+minutes on a full-size ring. You only need it if you suspect the ring is
+malformed somewhere the trace did not go.
 
 ### With a monitor (recommended for more than two turtles)
 

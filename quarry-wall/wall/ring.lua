@@ -229,7 +229,49 @@ function ring.survey(cfg, strict)
   nav.goHome()
   if not canon then return nil, cerr end
 
+  -- Free, so it runs on every trace rather than only when asked.
+  local sane, serr = ring.checkShape(canon)
+  if not sane then return nil, serr end
+
   return canon
+end
+
+--[[--------------------------------------------------------------------------
+  checkShape -- verify the traced loop is a proper one-block-wide ring.
+
+  Pure arithmetic on the cell list, so it costs nothing. In a closed loop one
+  block wide, every cell has exactly two orthogonal neighbours that are also in
+  the loop. Three or more means the ring is two blocks wide somewhere; a
+  repeated cell means the trace doubled back through itself.
+
+  This replaces walking into every neighbour of every cell to check the same
+  thing, which cost about six moves per cell -- some eight minutes on a full
+  size ring, to confirm something the geometry already tells us.
+----------------------------------------------------------------------------]]
+function ring.checkShape(cells)
+  local at = {}
+
+  for i, c in ipairs(cells) do
+    local key = c.x .. "," .. c.z
+    if at[key] then
+      return false, ("the trace passed through %d,%d twice -- the ring is not "
+                  .. "a simple loop"):format(c.x, c.z)
+    end
+    at[key] = i
+  end
+
+  for _, c in ipairs(cells) do
+    local n = 0
+    for _, d in ipairs({ {0, 1}, {1, 0}, {0, -1}, {-1, 0} }) do
+      if at[(c.x + d[1]) .. "," .. (c.z + d[2])] then n = n + 1 end
+    end
+    if n ~= 2 then
+      return false, ("%d,%d has %d ring neighbours, expected 2 -- is the ring "
+                  .. "one block wide there?"):format(c.x, c.z, n)
+    end
+  end
+
+  return true
 end
 
 --- Bounding box and anchor position, for reporting.

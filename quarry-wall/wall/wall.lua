@@ -171,13 +171,22 @@ function cmd.check()
   end
 end
 
-function cmd.scan()
+function cmd.scan(args)
+  -- The shape of the ring is verified from the traced list for free, so the
+  -- exhaustive version -- which steps into every neighbour of every cell, and
+  -- takes minutes -- is opt-in rather than the default.
+  local strict = false
+  for _, a in ipairs(args or {}) do
+    if a == "--strict" then strict = true end
+  end
+
   print("Looking for the marker ring...")
+  if strict then print("(strict: checking every neighbour, this is slow)") end
 
   local ok, ferr = build.refuel(cfg)
   if not ok then die(ferr) end
 
-  local cells, err = ring.survey(cfg, true)   -- strict: check the ring is 1 wide
+  local cells, err = ring.survey(cfg, strict)
   if not cells then die(err) end
 
   local d = ring.describe(cells)
@@ -396,7 +405,7 @@ end
 function cmd.help()
   print("wall check                    check config and turtle, move nothing")
   print("wall join                     wait for the monitor to assign a slot")
-  print("wall scan                     trace the ring and measure, place nothing")
+  print("wall scan [--strict]          trace the ring and measure, place nothing")
   print("wall build [n] [i] [courses]  build this turtle's share")
   print("wall resume                   carry on from an interrupted run")
   print("wall seal [courses]           fill the gap under the wall base")

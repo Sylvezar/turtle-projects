@@ -288,6 +288,45 @@ if cells then
 end
 
 --[[--------------------------------------------------------------------------
+  5b. The free shape check
+----------------------------------------------------------------------------]]
+
+section("ring shape check")
+
+local goodRing = {}
+for x = 0, 4 do goodRing[#goodRing + 1] = { x = x, z = 0 } end
+for z = 1, 4 do goodRing[#goodRing + 1] = { x = 4, z = z } end
+for x = 3, 0, -1 do goodRing[#goodRing + 1] = { x = x, z = 4 } end
+for z = 3, 1, -1 do goodRing[#goodRing + 1] = { x = 0, z = z } end
+
+ok(ring.checkShape(goodRing), "a clean one-wide loop passes")
+
+-- A cell hanging off the side makes one cell have three neighbours.
+local fat = {}
+for _, c in ipairs(goodRing) do fat[#fat + 1] = { x = c.x, z = c.z } end
+fat[#fat + 1] = { x = 1, z = 1 }        -- touches (1,0) and (0,1)
+
+local fatOk, fatErr = ring.checkShape(fat)
+ok(not fatOk, "a two-wide patch is rejected")
+ok(fatErr and fatErr:find("one block wide"),
+   "and says what is wrong: " .. tostring(fatErr))
+
+-- A repeated cell means the trace doubled back.
+local dup = {}
+for _, c in ipairs(goodRing) do dup[#dup + 1] = { x = c.x, z = c.z } end
+dup[#dup + 1] = { x = 0, z = 0 }
+
+local dupOk, dupErr = ring.checkShape(dup)
+ok(not dupOk, "a repeated cell is rejected")
+ok(dupErr and dupErr:find("twice"), "and says so: " .. tostring(dupErr))
+
+-- The real traced ring passes it, which is what makes the slow physical
+-- neighbour walk unnecessary.
+if cells then
+  ok(ring.checkShape(cells), "the traced quarry ring passes the shape check")
+end
+
+--[[--------------------------------------------------------------------------
   6. Different turtles, different places, same ring
 ----------------------------------------------------------------------------]]
 
