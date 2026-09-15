@@ -109,7 +109,12 @@ print("Next:  wall/wall check")
     out.append("")
 
     text = "\n".join(out)
-    OUT.write_text(text, encoding="utf-8")
+
+    # newline="" so Windows does not rewrite every \n as \r\n. The turtles read
+    # this file verbatim, and the embedded sources would carry those CRs into
+    # every file it unpacks.
+    with OUT.open("w", encoding="utf-8", newline="") as fh:
+        fh.write(text)
 
     size = len(text.encode("utf-8"))
     print(f"wrote {OUT.relative_to(ROOT)}")
