@@ -389,9 +389,24 @@ function cmd.join()
     if not mine then die("wall ring: " .. tostring(outerErr)) end
     print(("  %d cells"):format(#mine))
 
+    -- Measure the height while out here. It costs a climb, but the others are
+    -- busy on the pad ring meanwhile, so it takes no extra wall-clock time --
+    -- and it means nobody has to be told the course count by hand.
+    print("Measuring height...")
+    report.now({ state = "measuring" })
+
+    local courses, herr = scan.height(cfg, mine, { stayOut = true })
+    if not courses then die("height: " .. tostring(herr)) end
+    if herr then printError("note: " .. herr) end
+    print(("  %d courses"):format(courses))
+
+    -- Park back on the ring, well clear of the pad.
+    nav.goTo(mine[1].x, 0, mine[1].z)
+
     -- Hand both rings over and sit still out here: the others are using the
     -- pad, and a turtle wandering back through them would spoil their traces.
     report.now({ kind = "scanned", role = "scout",
+                 courses = courses,
                  inner = frame.flatten(innerMine),
                  outer = frame.flatten(mine) })
 

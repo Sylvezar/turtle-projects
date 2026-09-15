@@ -60,7 +60,7 @@ local scoutData              -- { inner =, outer = } from the scout
 local innerDone = {}         -- index -> true
 local nextInner              -- who to send off to trace the pad ring next
 local readyCells = {}        -- index -> cell count it worked out
-local halted, note
+local halted, note, assigned
 
 local function now() return os.clock() end
 
@@ -113,6 +113,8 @@ end
 --- Hand out the slices. Only once every turtle has said what it worked out,
 --- and only if they all worked out the same ring.
 local function assignAll()
+  if assigned then return end
+
   local size
   for i = 1, #waiting do
     local n = readyCells[i]
@@ -125,10 +127,33 @@ local function assignAll()
     size = n
   end
 
+  -- The scout measured the height out at the ring, so this is a confirmation
+  -- rather than something to look up.
+  term.clear()
+  term.setCursorPos(1, 1)
+  print(("All %d turtles have the ring, %d cells."):format(#waiting, size))
+  print("")
+  if courses then
+    print(("The scout measured %d courses."):format(courses))
+  else
+    print("The scout did not report a height.")
+  end
+  print("")
+  write(("Courses to build [%s]: "):format(tostring(courses or "")))
+
+  local typed = read()
+  if typed ~= "" then courses = tonumber(typed) end
+  while not courses or courses < 1 or courses ~= math.floor(courses) do
+    write("  enter a whole number of at least 1: ")
+    courses = tonumber(read())
+  end
+
   for i, t in ipairs(waiting) do
     tell(t.id, { kind = "assign", index = i,
                  turtles = #waiting, courses = courses })
   end
+
+  assigned = true
   phase = "watch"
 end
 
@@ -150,6 +175,7 @@ local function handle(msg)
   if msg.kind == "scanned" and who then
     if msg.role == "scout" then
       scoutData = { inner = msg.inner, outer = msg.outer }
+      if msg.courses then courses = msg.courses end
     else
       innerDone[who] = true
       nextInner = nextInner + 1
@@ -359,18 +385,6 @@ local function beginLaunch()
 
   write(("Launch with these %d? Later arrivals miss out. (y/N) "):format(#waiting))
   if read():lower():sub(1, 1) ~= "y" then return end
-
-  print("")
-  print("Run `wall scan` on one turtle first if you have not; it prints the")
-  print("course count.")
-  print("")
-
-  write("How many courses tall: ")
-  courses = tonumber(read())
-  while not courses or courses < 1 or courses ~= math.floor(courses) do
-    write("  enter a whole number of at least 1: ")
-    courses = tonumber(read())
-  end
 
   phase = "scan"
 

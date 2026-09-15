@@ -149,8 +149,28 @@ end
 """.strip()
     )
     out.append(f'print("build {build_id}  ({made})")')
-    out.append('print("")')
-    out.append('print("Next:  wall/wall check")')
+    out.append("")
+    out.append(r"""
+-- Anything after the url is handed straight to the program, so one line both
+-- installs and starts a turtle:
+--
+--     wget run <url> join
+--
+-- With nothing after it, this only installs.
+local args = { ... }
+
+if args[1] and not stale then
+  print("")
+  print("Running: wall/wall " .. table.concat(args, " "))
+  print("")
+  shell.run("wall/wall", table.unpack(args))
+elseif args[1] then
+  printError("Not starting: sort the config out first.")
+else
+  print("")
+  print("Next:  wall/wall check")
+end
+""".strip())
     out.append("")
 
     text = "\n".join(out)

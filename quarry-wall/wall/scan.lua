@@ -18,7 +18,10 @@
   paper over. If your pit has a ceiling, use "roof" and none of that applies.
 
   Either way this is the one measurement that can disagree between turtles, so
-  the course count is typed in at launch rather than measured per turtle.
+  it is taken once and shared rather than measured by each of them. The turtle
+  that walks the wall ring measures it while it is out there -- which costs
+  nothing in wall-clock time, since the others are busy tracing the launch pad
+  ring meanwhile -- and the monitor hands the answer to everyone.
 ----------------------------------------------------------------------------]]
 
 local nav  = require("nav")
@@ -119,11 +122,12 @@ end
 --[[--------------------------------------------------------------------------
   height -- courses from the wall's base up to whatever stops it.
 ----------------------------------------------------------------------------]]
-function scan.height(cfg, cells)
+function scan.height(cfg, cells, opts)
+  opts = opts or {}
   local corner = pickCorner(cells)
 
   if not nav.goTo(corner.x, 0, corner.z) then
-    nav.goHome()
+    if not opts.stayOut then nav.goHome() end
     return nil, "could not reach the ring corner to measure height"
   end
 
@@ -136,7 +140,9 @@ function scan.height(cfg, cells)
     top, note = climbToRoof(cfg)
   end
 
-  nav.goHome()
+  -- The scout measures this while the others are using the launch pad, so it
+  -- must not come wandering back through them.
+  if not opts.stayOut then nav.goHome() end
 
   if not top then return nil, note end
 
