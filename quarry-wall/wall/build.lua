@@ -202,6 +202,30 @@ end
 
 build.burnWhatWeHave = burnWhatWeHave
 
+--[[--------------------------------------------------------------------------
+  Put back whatever fuel we did not burn.
+
+  Fuel is drawn in whole grabs but burned only up to the target, so there is
+  always a remainder -- and it used to ride along in a slot for the rest of the
+  trip, sitting in the inventory while the turtle tried to craft. Anything left
+  over goes straight back in the fuel chest.
+----------------------------------------------------------------------------]]
+function build.returnSpareFuel(cfg)
+  local spec = cfg.station.fuel
+  if not spec then return end
+
+  for _, s in ipairs(inv.ALL) do
+    if turtle.getItemCount(s) > 0 then
+      turtle.select(s)
+      -- refuel(0) reports combustible without consuming.
+      if turtle.refuel(0) then
+        turtle.select(s)
+        nav.dropAt(spec, turtle.getItemCount(s))
+      end
+    end
+  end
+end
+
 function build.refuel(cfg)
   if turtle.getFuelLevel() == "unlimited" then return true end
   if turtle.getFuelLevel() >= cfg.fuel.reserve then return true end
@@ -231,10 +255,16 @@ function build.refuel(cfg)
     if slot then
       turtle.select(slot)
       if nav.suckAt(spec, cfg.fuel.pullAtOnce) then
-        if burnWhatWeHave(cfg.fuel.refuelTo) then return true end
+        if burnWhatWeHave(cfg.fuel.refuelTo) then
+          build.returnSpareFuel(cfg)
+          return true
+        end
       end
     end
-    if turtle.getFuelLevel() >= cfg.fuel.reserve then return true end
+    if turtle.getFuelLevel() >= cfg.fuel.reserve then
+      build.returnSpareFuel(cfg)
+      return true
+    end
     if attempt == 1 then print("Fuel chest empty -- waiting.") end
     sleep(5)
   end

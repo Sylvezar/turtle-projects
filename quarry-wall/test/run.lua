@@ -834,6 +834,17 @@ fok, ferr = build.refuel(cfg)
 ok(fok, "a coal block in the inventory is enough to start: " .. tostring(ferr))
 ok(turtle.getFuelLevel() >= cfg.fuel.reserve, "and it fuelled up properly")
 
+-- Surplus fuel must not ride along: it would sit in a slot while the turtle
+-- tries to craft, which is exactly what broke the first real run.
+local leftOver = 0
+for _, s in ipairs(inv.ALL) do
+  local n = inv.nameAt(s)
+  if n == M("coal_block") or n == M("coal") then
+    leftOver = leftOver + turtle.getItemCount(s)
+  end
+end
+eq(leftOver, 0, "no fuel is left in the inventory after refuelling")
+
 mock.T.fuel = 100000
 
 local onRing = {}

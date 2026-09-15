@@ -196,15 +196,16 @@ config.report = {
               cover a whole round trip: out to the ring, all the way around,
               and back.
   refuelTo    top up to at least this much.
-  pullAtOnce  items to take from the fuel chest per grab. Keep it modest --
-              a whole stack of coal blocks is 51,200 fuel against a cap of
-              about 20,000, and the excess is gone.
+  pullAtOnce  items to take from the fuel chest per grab. Keep it small: fuel
+              is burned only up to refuelTo, and whatever is left over has to
+              be handed back. A whole stack of coal blocks is 51,200 fuel
+              against a tank capping out around 20,000.
   Ignored entirely on servers with turtle fuel disabled.
 ----------------------------------------------------------------------------]]
 config.fuel = {
   reserve    = 3000,
   refuelTo   = 8000,
-  pullAtOnce = 16,
+  pullAtOnce = 4,
 }
 
 return config
